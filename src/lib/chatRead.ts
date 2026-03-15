@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useDataStore } from '../stores/dataStore';
 
-const KEY = (chatId: string) => `bookloop_chat_read_${chatId}`;
+const KEY      = (chatId: string) => `bookloop_chat_read_${chatId}`;
+const BASE_KEY = (userId: string) => `bookloop_baseline_${userId}`;
 
 /** Store "now" as the last-read timestamp for a specific chat. */
 export async function markChatRead(chatId: string): Promise<void> {
@@ -22,12 +23,28 @@ export async function markChatRead(chatId: string): Promise<void> {
 /**
  * Return the ISO timestamp when this chat was last read.
  * If never read locally, returns `fallback` (if provided) or epoch.
- * Pass the chat's `last_message_at` as fallback so old messages on a fresh
- * install don't all appear unread.
+ * Pass `getUserBaselineTime(userId)` as fallback so messages before the user's
+ * first login don't appear unread, but new messages in unread chats DO appear.
  */
 export async function getChatReadAt(chatId: string, fallback?: string): Promise<string> {
   const v = await AsyncStorage.getItem(KEY(chatId));
   return v ?? fallback ?? new Date(0).toISOString();
+}
+
+/**
+ * Returns the ISO timestamp of the user's first login on this device.
+ * Used as the unread baseline: messages before first login are "already seen",
+ * messages after are unread until explicitly opened.
+ * Created once and never changed.
+ */
+export async function getUserBaselineTime(userId: string): Promise<string> {
+  const key = BASE_KEY(userId);
+  let v = await AsyncStorage.getItem(key);
+  if (!v) {
+    v = new Date().toISOString();
+    await AsyncStorage.setItem(key, v);
+  }
+  return v;
 }
 
 // ── Module-level refresh hook so ChatScreen can ping the nav badge ──────────

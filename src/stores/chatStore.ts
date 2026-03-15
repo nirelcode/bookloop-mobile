@@ -26,9 +26,12 @@ interface ChatCache {
 
 interface ChatStore {
   chats: Record<string, ChatCache>;
+  recipientChatMap: Record<string, string>; // recipientId → chatId
   getMessages: (chatId: string) => CachedMessage[];
   isChatStale: (chatId: string) => boolean;
   hasCache: (chatId: string) => boolean;
+  setChatIdForRecipient: (recipientId: string, chatId: string) => void;
+  getChatIdForRecipient: (recipientId: string) => string | undefined;
   setMessages: (chatId: string, messages: CachedMessage[]) => void;
   appendMessage: (chatId: string, msg: CachedMessage) => void;
   prependMessages: (chatId: string, msgs: CachedMessage[]) => void;
@@ -37,6 +40,7 @@ interface ChatStore {
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   chats: {},
+  recipientChatMap: {},
 
   getMessages: (chatId) => get().chats[chatId]?.messages ?? [],
 
@@ -44,6 +48,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const c = get().chats[chatId];
     return !c || Date.now() - c.fetchedAt > CHAT_TTL;
   },
+
+  setChatIdForRecipient: (recipientId, chatId) =>
+    set(s => ({ recipientChatMap: { ...s.recipientChatMap, [recipientId]: chatId } })),
+
+  getChatIdForRecipient: (recipientId) => get().recipientChatMap[recipientId],
 
   // fetchedAt > 0 means we've fetched at least once (even if result was empty)
   hasCache: (chatId) => {

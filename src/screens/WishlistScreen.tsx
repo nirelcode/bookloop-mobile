@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   View,
   Text,
@@ -70,8 +71,8 @@ function BookCard({ item, isRTL, onPress }: { item: Book; isRTL: boolean; onPres
         >
           <Ionicons
             name={isFavorite ? 'heart' : 'heart-outline'}
-            size={15}
-            color={isFavorite ? C.pink : 'rgba(255,255,255,0.9)'}
+            size={22}
+            color={isFavorite ? C.pink : 'rgba(255,255,255,0.95)'}
           />
         </TouchableOpacity>
       </View>
@@ -94,6 +95,7 @@ function BookCard({ item, isRTL, onPress }: { item: Book; isRTL: boolean; onPres
 
 export default function WishlistScreen() {
   const navigation = useNavigation<any>();
+  const insets     = useSafeAreaInsets();
   const { user }   = useAuthStore();
   const { isRTL }  = useLanguageStore();
 
@@ -189,22 +191,32 @@ export default function WishlistScreen() {
           </Text>
           <Text style={s.emptySub}>
             {isRTL
-              ? 'לחץ על ♡ בכל ספר כדי לשמור אותו כאן'
-              : 'Tap ♡ on any book to save it here'}
+              ? 'לחץ על הלב בכל ספר כדי לשמור אותו כאן'
+              : 'Tap the heart on any book to save it here'}
           </Text>
 
           {/* Step guide */}
           <View style={s.steps}>
             {(isRTL
-              ? ['עיין בקטלוג', 'לחץ ♡ על ספר', 'מצא אותו כאן']
-              : ['Browse the catalog', 'Tap ♡ on a book', 'Find it here anytime']
-            ).map((step, i) => (
-              <View key={i} style={s.step}>
+              ? [
+                  { label: 'עיינו בקטלוג', icon: 'search-outline' },
+                  { label: 'לחצו על הלב על ספר שאהבתם', icon: 'heart-outline' },
+                  { label: 'תמצאו אותו כאן תמיד', icon: 'bookmark-outline' },
+                ]
+              : [
+                  { label: 'Browse the catalog', icon: 'search-outline' },
+                  { label: 'Tap the heart on a book you love', icon: 'heart-outline' },
+                  { label: 'Find it here anytime', icon: 'bookmark-outline' },
+                ]
+            ).map(({ label, icon }, i) => (
+              <View key={i} style={[s.step, isRTL && s.stepRTL]}>
                 <View style={s.stepNum}>
                   <Text style={s.stepNumTxt}>{i + 1}</Text>
                 </View>
-                <Text style={s.stepTxt}>{step}</Text>
-                {i < 2 && <Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={14} color={C.muted} />}
+                <View style={[s.stepIconWrap, { backgroundColor: i === 0 ? '#eff6ff' : i === 1 ? '#fce7f3' : '#d1fae5' }]}>
+                  <Ionicons name={icon as any} size={16} color={i === 0 ? C.primary : i === 1 ? C.pink : C.emerald} />
+                </View>
+                <Text style={[s.stepTxt, isRTL && { textAlign: 'right' }]}>{label}</Text>
               </View>
             ))}
           </View>
@@ -243,7 +255,7 @@ export default function WishlistScreen() {
         )}
         numColumns={2}
         columnWrapperStyle={s.row}
-        contentContainerStyle={s.listContent}
+        contentContainerStyle={[s.listContent, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} />}
       />
@@ -265,11 +277,13 @@ const s = StyleSheet.create({
   emptyTitle:   { fontSize: 18, fontWeight: '600', color: C.text, marginBottom: 8, textAlign: 'center' },
   emptySub:     { fontSize: 14, color: C.muted, textAlign: 'center', lineHeight: 21, marginBottom: 24 },
   // Step guide
-  steps:      { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 24 },
-  step:       { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  stepNum:    { width: 22, height: 22, borderRadius: 11, backgroundColor: C.primaryLight, justifyContent: 'center', alignItems: 'center' },
-  stepNumTxt: { fontSize: 11, fontWeight: '700', color: C.primary },
-  stepTxt:    { fontSize: 12, color: C.sub, fontWeight: '500' },
+  steps:       { width: '100%', gap: 10, marginBottom: 28 },
+  step:        { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.white, borderRadius: 14, borderWidth: 1, borderColor: C.border, paddingVertical: 12, paddingHorizontal: 14 },
+  stepRTL:     { flexDirection: 'row-reverse' },
+  stepNum:     { width: 24, height: 24, borderRadius: 12, backgroundColor: C.primaryLight, justifyContent: 'center', alignItems: 'center' },
+  stepNumTxt:  { fontSize: 12, fontWeight: '700', color: C.primary },
+  stepIconWrap:{ width: 32, height: 32, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  stepTxt:     { flex: 1, fontSize: 13, color: C.sub, fontWeight: '500' },
 
   browseBtn:    { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: C.primary, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.07, shadowRadius: 4, elevation: 2 },
   browseBtnTxt: { color: C.white, fontSize: 15, fontWeight: '600' },
@@ -297,8 +311,7 @@ const s = StyleSheet.create({
   // Heart button overlay
   heartBtn: {
     position: 'absolute', top: 6, right: 6,
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.28)',
+    width: 32, height: 32,
     justifyContent: 'center', alignItems: 'center',
   },
   heartBtnRTL: { right: undefined, left: 6 },

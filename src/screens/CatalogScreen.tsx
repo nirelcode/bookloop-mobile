@@ -8,10 +8,10 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   TextInput,
-  Dimensions,
   ScrollView,
   RefreshControl,
   Animated,
+  useWindowDimensions,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -25,16 +25,24 @@ import { haversineKm } from '../lib/locationUtils';
 import i18n from '../lib/i18n';
 import type { CatalogScreenNavigationProp } from '../types/navigation';
 import FiltersModal from '../components/FiltersModal';
-import { GENRE_DB_GROUPS, CITY_COORDS, GENRE_LABEL_MAP } from '../constants/books';
+import { GENRE_DB_GROUPS, CITY_COORDS, GENRE_LABEL_MAP, DB_VALUE_TO_LABEL } from '../constants/books';
 import { CatalogSkeletons } from '../components/Skeleton';
 import { useFavorite } from '../hooks/useFavorite';
 import { FetchErrorBanner } from '../components/Toast';
 import { useDataStore } from '../stores/dataStore';
 
-const { width: SCREEN_W } = Dimensions.get('window');
 const H_PAD = 16;
 const COL_GAP = 10;
-const CARD_W = (SCREEN_W - H_PAD * 2 - COL_GAP) / 2;
+
+function getNumColumns(screenW: number) {
+  if (screenW >= 900) return 4;
+  if (screenW >= 600) return 3;
+  return 2;
+}
+
+function getCardWidth(screenW: number, numColumns: number) {
+  return (screenW - H_PAD * 2 - COL_GAP * (numColumns - 1)) / numColumns;
+}
 
 const C = {
   bg: '#fafaf9',
@@ -45,21 +53,26 @@ const C = {
   muted: '#a8a29e',
   primary: '#2563eb',
   primaryLight: '#eff6ff',
-  emerald: '#10b981',
+  emerald: '#059669',
   emeraldLight: '#d1fae5',
-  amber: '#f59e0b',
+  amber: '#d97706',
   amberLight: '#fef3c7',
   inputBg: '#f5f5f4',
   pink: '#db2777',
 };
 
 // ── Condition badge helpers ────────────────────────────────────────────────
-const COND_BG:    Record<string, string> = { new: '#d1fae5', like_new: '#dbeafe', good: '#f5f5f4', fair: '#fef3c7' };
-const COND_COLOR: Record<string, string> = { new: '#059669', like_new: '#2563eb', good: '#78716c', fair: '#d97706' };
+const COND_BG:    Record<string, string> = { new: '#d1fae5', like_new: '#ede9fe', good: '#f5f5f4', fair: '#fef3c7' };
+const COND_COLOR: Record<string, string> = { new: '#059669', like_new: '#7c3aed', good: '#78716c', fair: '#d97706' };
 const COND_EN:    Record<string, string> = { new: 'New', like_new: 'Like New', good: 'Good', fair: 'Fair' };
 const COND_HE:    Record<string, string> = { new: 'חדש', like_new: 'כמו חדש', good: 'טוב', fair: 'סביר' };
 
-const GENRE_LABELS = GENRE_LABEL_MAP;
+// Genre label lookup: DB sub-values first, fall back to top-level keys
+function getGenreLabel(g: string, isRTL: boolean): string {
+  const label = DB_VALUE_TO_LABEL[g] ?? GENRE_LABEL_MAP[g];
+  if (!label) return g;
+  return isRTL ? label.he : label.en;
+}
 
 // ── Filter chip helpers ────────────────────────────────────────────────────
 
@@ -77,11 +90,13 @@ function buildChips(filters: any, isRTL: boolean): Chip[] {
   }
   if (filters.genres?.length) {
     (filters.genres as string[]).forEach(g => {
-      chips.push({ key: `genre:${g}`, label: isRTL ? (GENRE_LABELS[g]?.he ?? g) : (GENRE_LABELS[g]?.en ?? g) });
+      chips.push({ key: `genre:${g}`, label: getGenreLabel(g, isRTL) });
     });
   }
-  if (filters.condition) {
-    chips.push({ key: 'condition', label: i18n.t(`book.condition.${filters.condition}`) });
+  if (filters.conditions?.length) {
+    filters.conditions.forEach((c: string) =>
+      chips.push({ key: `condition:${c}`, label: i18n.t(`book.condition.${c}`) })
+    );
   }
   if (filters.city) {
     chips.push({ key: 'city', label: filters.city });
@@ -96,6 +111,9 @@ function buildChips(filters: any, isRTL: boolean): Chip[] {
   } else if (filters.maxPrice !== undefined) {
     chips.push({ key: 'price', label: isRTL ? `עד ₪${filters.maxPrice}` : `Up to ₪${filters.maxPrice}` });
   }
+  if (filters.shipping) {
+    chips.push({ key: 'shipping', label: isRTL ? 'משלוח' : 'Shipping' });
+  }
   return chips;
 }
 
@@ -106,13 +124,17 @@ function dropChip(filters: any, key: string) {
     const g = key.slice(6);
     next.genres = (next.genres as string[] || []).filter((x: string) => x !== g);
     if (next.genres.length === 0) delete next.genres;
+  } else if (key.startsWith('condition:')) {
+    const c = key.slice(10);
+    next.conditions = (next.conditions as string[] || []).filter((x: string) => x !== c);
+    if (next.conditions.length === 0) delete next.conditions;
   } else delete next[key];
   return next;
 }
 
 // ── Book card (portrait, 2-col) ────────────────────────────────────────────
 
-function BookCard({ item, isRTL, onPress }: { item: Book; isRTL: boolean; onPress: () => void }) {
+function BookCard({ item, isRTL, onPress, cardWidth }: { item: Book; isRTL: boolean; onPress: () => void; cardWidth: number }) {
   const { isFavorite, toggleFavorite } = useFavorite(item.id);
 
   let badge: { label: string; fg2: string } | null = null;
@@ -127,7 +149,7 @@ function BookCard({ item, isRTL, onPress }: { item: Book; isRTL: boolean; onPres
   const cond = (item as any).condition as string | undefined;
 
   return (
-    <TouchableOpacity style={s.card} onPress={onPress} activeOpacity={0.82}>
+    <TouchableOpacity style={[s.card, { width: cardWidth }]} onPress={onPress} activeOpacity={0.82}>
       <View style={s.imgBox}>
         <Image
           source={{ uri: item.images?.[0] ?? `https://picsum.photos/seed/${item.id}/300/400` }}
@@ -143,14 +165,16 @@ function BookCard({ item, isRTL, onPress }: { item: Book; isRTL: boolean; onPres
         >
           <Ionicons
             name={isFavorite ? 'heart' : 'heart-outline'}
-            size={15}
-            color={isFavorite ? C.pink : 'rgba(255,255,255,0.9)'}
+            size={22}
+            color={isFavorite ? C.pink : 'rgba(255,255,255,0.95)'}
           />
         </TouchableOpacity>
       </View>
       <View style={s.cardBody}>
         <Text style={[s.cardTitle, isRTL && s.rAlign]} numberOfLines={2}>{item.title}</Text>
-        <Text style={[s.cardAuthor, isRTL && s.rAlign]} numberOfLines={1}>{item.author}</Text>
+        <Text style={[s.cardAuthor, isRTL && s.rAlign]} numberOfLines={1}>
+          {item.author || (isRTL ? 'מחבר לא ידוע' : 'Unknown')}
+        </Text>
         {(cond || genres.length > 0) && (
           <View style={[s.genreRow, isRTL && { flexDirection: 'row-reverse' }]}>
             {cond && COND_BG[cond] && (
@@ -163,7 +187,7 @@ function BookCard({ item, isRTL, onPress }: { item: Book; isRTL: boolean; onPres
             {genres.slice(0, cond ? 1 : 2).map(g => (
               <View key={g} style={s.genrePill}>
                 <Text style={s.genrePillTxt} numberOfLines={1}>
-                  {isRTL ? (GENRE_LABELS[g]?.he ?? g) : (GENRE_LABELS[g]?.en ?? g)}
+                  {getGenreLabel(g, isRTL)}
                 </Text>
               </View>
             ))}
@@ -194,7 +218,9 @@ const SORT_OPTIONS: { value: SortOption; labelEn: string; labelHe: string; icon:
 ];
 
 const ITEMS_PER_PAGE = 20;
-const NEAR_ME_RADIUS_KM = 40;
+const NEAR_ME_RADIUS_KM = 25;
+
+const DEBUG_COORDS: { latitude: number; longitude: number } | null = null;
 
 export default function CatalogScreen() {
   const navigation  = useNavigation<CatalogScreenNavigationProp>();
@@ -203,6 +229,9 @@ export default function CatalogScreen() {
   const { coords }    = useLocationStore();
   const { blockedIds } = useDataStore();
   const insets      = useSafeAreaInsets();
+  const { width: screenW } = useWindowDimensions();
+  const numColumns  = getNumColumns(screenW);
+  const cardWidth   = getCardWidth(screenW, numColumns);
 
   const [books, setBooks]         = useState<Book[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -219,6 +248,11 @@ export default function CatalogScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [sort, setSort]           = useState<SortOption>('new');
   const [showSort, setShowSort]   = useState(false);
+
+  // ── Near Me waterfall state (refs so they don't trigger re-renders) ───────
+  const nearMeCityQueueRef = useRef<string[]>([]);
+  const nearMeCityIndexRef = useRef(0);
+  const nearMeCityPageRef  = useRef(0);
 
   // ── Collapsible header ────────────────────────────────────────────────────
   const collapsibleAnim = useRef(new Animated.Value(1)).current;
@@ -291,48 +325,99 @@ export default function CatalogScreen() {
         query = query.not('user_id', 'in', `(${blockedIds.join(',')})`);
       }
 
-      // Near Me: resolve nearby cities and filter by city name
-      if (filters.nearMe && coords) {
-        const nearbyCities = Object.entries(CITY_COORDS)
-          .filter(([, cc]) => haversineKm(coords.latitude, coords.longitude, cc.lat, cc.lng) <= NEAR_ME_RADIUS_KM)
-          .map(([city]) => city);
-        if (nearbyCities.length > 0) query = query.in('city', nearbyCities);
-      }
+      const effectiveCoords = DEBUG_COORDS ?? coords;
+      const isNearMe = !!(filters.nearMe && effectiveCoords);
 
-      // Ordering + pagination
-      if (sort === 'price_asc') {
-        query = query.order('price', { ascending: true });
-      } else if (sort === 'price_desc') {
-        query = query.order('price', { ascending: false });
+      if (isNearMe) {
+        // ── Near Me waterfall: fetch one city at a time in distance order ──
+        if (reset) {
+          const queue = Object.entries(CITY_COORDS)
+            .map(([city, cc]) => ({ city, dist: haversineKm(effectiveCoords!.latitude, effectiveCoords!.longitude, cc.lat, cc.lng) }))
+            .filter(({ dist }) => dist <= NEAR_ME_RADIUS_KM)
+            .sort((a, b) => a.dist - b.dist)
+            .map(c => c.city);
+          nearMeCityQueueRef.current  = queue;
+          nearMeCityIndexRef.current  = 0;
+          nearMeCityPageRef.current   = 0;
+        }
+
+        const queue = nearMeCityQueueRef.current;
+        const ci    = nearMeCityIndexRef.current;
+        const cp    = nearMeCityPageRef.current;
+
+        if (ci >= queue.length) {
+          setHasMore(false);
+          return;
+        }
+
+        query = query
+          .eq('city', queue[ci])
+          .order('created_at', { ascending: false })
+          .range(cp * ITEMS_PER_PAGE, (cp + 1) * ITEMS_PER_PAGE - 1);
+
+        if (debouncedSearch)           query = query.or(`title.ilike.%${debouncedSearch}%,author.ilike.%${debouncedSearch}%`);
+        if (filters.listingType)       query = query.eq('listing_type', filters.listingType);
+        if (filters.genres?.length) {
+          const dbValues = (filters.genres as string[]).flatMap((g: string) => GENRE_DB_GROUPS[g] ?? [g]);
+          query = query.overlaps('genres', dbValues);
+        }
+        if (filters.conditions?.length) query = query.in('condition', filters.conditions);
+        if (filters.shipping)           query = query.eq('shipping_type', 'shipping');
+        if (filters.minPrice !== undefined) query = query.gte('price', filters.minPrice);
+        if (filters.maxPrice !== undefined) query = query.lte('price', filters.maxPrice);
+
+        const { data, error } = await query;
+        if (error) throw error;
+
+        const newBooks = (data ?? []) as Book[];
+
+        if (newBooks.length < ITEMS_PER_PAGE) {
+          // City exhausted — advance to next city
+          nearMeCityIndexRef.current = ci + 1;
+          nearMeCityPageRef.current  = 0;
+          setHasMore(ci + 1 < queue.length);
+        } else {
+          nearMeCityPageRef.current = cp + 1;
+          setHasMore(true);
+        }
+
+        setBooks(prev => reset ? newBooks : [...prev, ...newBooks.filter(b => !prev.some(p => p.id === b.id))]);
+        if (reset) setFetchError(false);
+
       } else {
-        query = query.order('created_at', { ascending: false });
-      }
-      query = query.range(currentPage * ITEMS_PER_PAGE, (currentPage + 1) * ITEMS_PER_PAGE - 1);
+        // ── Normal mode ────────────────────────────────────────────────────
+        if (sort === 'price_asc') {
+          query = query.order('price', { ascending: true });
+        } else if (sort === 'price_desc') {
+          query = query.order('price', { ascending: false });
+        } else {
+          query = query.order('created_at', { ascending: false });
+        }
+        query = query.range(currentPage * ITEMS_PER_PAGE, (currentPage + 1) * ITEMS_PER_PAGE - 1);
 
-      if (debouncedSearch)             query = query.or(`title.ilike.%${debouncedSearch}%,author.ilike.%${debouncedSearch}%`);
-      if (filters.listingType)         query = query.eq('listing_type', filters.listingType);
-      if (filters.genres?.length) {
-        const dbValues = (filters.genres as string[]).flatMap(
-          (g: string) => GENRE_DB_GROUPS[g] ?? [g]
-        );
-        query = query.overlaps('genres', dbValues);
-      }
-      if (filters.condition)           query = query.eq('condition', filters.condition);
-      if (filters.city)                query = query.eq('city', filters.city);
-      if (filters.minPrice !== undefined) query = query.gte('price', filters.minPrice);
-      if (filters.maxPrice !== undefined) query = query.lte('price', filters.maxPrice);
+        if (debouncedSearch)             query = query.or(`title.ilike.%${debouncedSearch}%,author.ilike.%${debouncedSearch}%`);
+        if (filters.listingType)         query = query.eq('listing_type', filters.listingType);
+        if (filters.genres?.length) {
+          const dbValues = (filters.genres as string[]).flatMap((g: string) => GENRE_DB_GROUPS[g] ?? [g]);
+          query = query.overlaps('genres', dbValues);
+        }
+        if (filters.conditions?.length)   query = query.in('condition', filters.conditions);
+        if (filters.city)                query = query.eq('city', filters.city);
+        if (filters.shipping)            query = query.eq('shipping_type', 'shipping');
+        if (filters.minPrice !== undefined) query = query.gte('price', filters.minPrice);
+        if (filters.maxPrice !== undefined) query = query.lte('price', filters.maxPrice);
 
-      const { data, error, count } = await query;
-      if (error) throw error;
+        const { data, error, count } = await query;
+        if (error) throw error;
 
-      const newBooks = (data ?? []) as Book[];
-
-      setBooks(prev => reset ? newBooks : [...prev, ...newBooks.filter(b => !prev.some(p => p.id === b.id))]);
-      setHasMore(newBooks.length === ITEMS_PER_PAGE);
-      setPage(currentPage + 1);
-      if (reset) {
-        setTotalCount(count ?? null);
-        setFetchError(false);
+        const newBooks = (data ?? []) as Book[];
+        setBooks(prev => reset ? newBooks : [...prev, ...newBooks.filter(b => !prev.some(p => p.id === b.id))]);
+        setHasMore(newBooks.length === ITEMS_PER_PAGE);
+        setPage(currentPage + 1);
+        if (reset) {
+          setTotalCount(count ?? null);
+          setFetchError(false);
+        }
       }
     } catch (err) {
       console.error('Error fetching books:', err);
@@ -360,8 +445,8 @@ export default function CatalogScreen() {
   // ── Render ─────────────────────────────────────────────────────
 
   const renderBook = useCallback(({ item }: { item: Book }) => (
-    <BookCard item={item} isRTL={isRTL} onPress={() => goToBook(item.id)} />
-  ), [isRTL]);
+    <BookCard item={item} isRTL={isRTL} onPress={() => goToBook(item.id)} cardWidth={cardWidth} />
+  ), [isRTL, cardWidth]);
 
   const activeFiltersCount = Object.values(filters).filter(v => v !== '' && v !== undefined).length;
 
@@ -441,15 +526,22 @@ export default function CatalogScreen() {
           {!loading && countLabel && (
             <View style={[s.countSortRow, isRTL && s.rowRev]}>
               <Text style={s.countTxt}>{countLabel}</Text>
-              <TouchableOpacity style={s.sortBtn} onPress={() => setShowSort(true)} activeOpacity={0.75}>
-                <Ionicons name="swap-vertical-outline" size={13} color={C.sub} />
-                <Text style={s.sortBtnTxt}>
-                  {isRTL
-                    ? SORT_OPTIONS.find(o => o.value === sort)?.labelHe
-                    : SORT_OPTIONS.find(o => o.value === sort)?.labelEn}
-                </Text>
-                <Ionicons name="chevron-down" size={12} color={C.muted} />
-              </TouchableOpacity>
+              {filters.nearMe ? (
+                <View style={s.sortBtn}>
+                  <Ionicons name="navigate-outline" size={13} color={C.sub} />
+                  <Text style={s.sortBtnTxt}>{isRTL ? 'לפי מרחק' : 'By distance'}</Text>
+                </View>
+              ) : (
+                <TouchableOpacity style={s.sortBtn} onPress={() => setShowSort(true)} activeOpacity={0.75}>
+                  <Ionicons name="swap-vertical-outline" size={13} color={C.sub} />
+                  <Text style={s.sortBtnTxt}>
+                    {isRTL
+                      ? SORT_OPTIONS.find(o => o.value === sort)?.labelHe
+                      : SORT_OPTIONS.find(o => o.value === sort)?.labelEn}
+                  </Text>
+                  <Ionicons name="chevron-down" size={12} color={C.muted} />
+                </TouchableOpacity>
+              )}
             </View>
           )}
         </Animated.View>
@@ -549,10 +641,11 @@ export default function CatalogScreen() {
         </View>
       ) : (
         <FlatList
+          key={numColumns}
           data={books}
           keyExtractor={item => item.id}
           renderItem={renderBook}
-          numColumns={2}
+          numColumns={numColumns}
           columnWrapperStyle={s.row}
           contentContainerStyle={s.list}
           showsVerticalScrollIndicator={false}
@@ -644,7 +737,6 @@ const s = StyleSheet.create({
 
   // Card
   card: {
-    width: CARD_W,
     backgroundColor: C.white,
     borderRadius: 16,
     overflow: 'hidden',
@@ -659,8 +751,7 @@ const s = StyleSheet.create({
   // Heart / favorite button (overlay on image, opposite corner from condition badge)
   heartBtn: {
     position: 'absolute', top: 6, right: 6,
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.28)',
+    width: 32, height: 32,
     justifyContent: 'center', alignItems: 'center',
   },
   heartBtnRTL: { right: undefined, left: 6 },
@@ -674,7 +765,7 @@ const s = StyleSheet.create({
   cardFooter:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 0 },
   cityRow:     { flexDirection: 'row', alignItems: 'center', gap: 3, flexShrink: 1, marginRight: 6 },
   cardCity:    { fontSize: 11, color: C.muted, flexShrink: 1 },
-  priceTxt:    { fontSize: 13, fontWeight: '600', flexShrink: 0 },
+  priceTxt:    { fontSize: 16, fontWeight: '600', flexShrink: 0 },
 
   // States
   empty:   { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },

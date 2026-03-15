@@ -34,7 +34,6 @@ import { compressImage, cropBookFromBBox, getImageDimensions, cropImage, rotateI
 import { BOOK_CONDITIONS, LISTING_TYPES, BOOK_GENRES, CITIES } from '../constants/books';
 import { CITY_COORDS } from '../constants/categoryGenreMap';
 import { GenrePickerModal } from '../components/GenrePickerModal';
-import { useToast, Toast } from '../components/Toast';
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -48,7 +47,7 @@ const C = {
   text: '#1e293b', sub: '#64748b', muted: '#94a3b8',
   primary: '#2563eb', primaryLight: '#eff6ff', primaryMid: '#dbeafe',
   purple: '#7c3aed', purpleLight: '#f5f3ff',
-  emerald: '#10b981', emeraldLight: '#d1fae5',
+  emerald: '#059669', emeraldLight: '#d1fae5',
   amber: '#f59e0b', amberLight: '#fef3c7',
   red: '#ef4444', redLight: '#fee2e2',
 };
@@ -275,6 +274,7 @@ function CameraCapture({ onPhotoTaken, onGallery, isRTL }: {
   const [permission, requestPermission] = useCameraPermissions();
   const [facing, setFacing] = useState<'front' | 'back'>('back');
   const cameraRef = useRef<CameraView>(null);
+  const insets    = useSafeAreaInsets();
 
   if (!permission) {
     return <View style={{ flex: 1, backgroundColor: '#000' }} />;
@@ -315,7 +315,7 @@ function CameraCapture({ onPhotoTaken, onGallery, isRTL }: {
     <View style={{ flex: 1 }}>
       <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing={facing} />
       <View style={{ flex: 1 }} />
-      <View style={sh.camBottomBar}>
+      <View style={[sh.camBottomBar, { paddingBottom: insets.bottom + 20 }]}>
         <TouchableOpacity style={sh.camSideBtn} onPress={onGallery}>
           <Ionicons name="images-outline" size={28} color={C.white} />
         </TouchableOpacity>
@@ -374,7 +374,7 @@ function computeInitialFromBbox(
 ): { panX: number; panY: number; zoom: number } {
   const base = Math.max(frameW / natW, frameH / natH);
   // Zoom so that bbox fills the frame (use min → show entire book, never cut off)
-  const z = Math.max(1, Math.min(3,
+  const z = Math.max(1, Math.min(5,
     Math.min(frameW / (cap.width * base), frameH / (cap.height * base))
   ));
   // Pan so bbox center aligns with frame center
@@ -540,7 +540,7 @@ function ManualCropModal({
 
     let newZoom = zoomRef.current;
     if (n >= 2 && prevDistRef.current > 0) {
-      newZoom = Math.max(1, Math.min(3, zoomRef.current * dist / prevDistRef.current));
+      newZoom = Math.max(1, Math.min(5, zoomRef.current * dist / prevDistRef.current));
       zoomRef.current = newZoom;
       setZoom(newZoom);
     }
@@ -574,7 +574,7 @@ function ManualCropModal({
   function applySlider(pageX: number) {
     const relX  = pageX - sliderPageXRef.current;
     const pct   = Math.max(0, Math.min(1, relX / (sliderWRef.current || 1)));
-    const newZoom = 1 + pct * 2; // 1× – 3×
+    const newZoom = 1 + pct * 4; // 1× – 5×
     const base  = baseScaleRef.current;
     const c = clampPanValues(
       panXRef.current, panYRef.current, newZoom,
@@ -634,7 +634,7 @@ function ManualCropModal({
   const imgTop     = containerSz.h / 2 + panY - imgH / 2;
   const frameLeft  = containerSz.w / 2 - frame.w / 2;
   const frameTop   = containerSz.h / 2 - frame.h / 2;
-  const sliderPct  = (zoom - 1) / 2; // 0–1
+  const sliderPct  = (zoom - 1) / 4; // 0–1
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false} statusBarTranslucent>
@@ -959,14 +959,15 @@ export default function PublishScreen() {
   const { isRTL }         = useLanguageStore();
   const navigation        = useNavigation<any>();
   const insets             = useSafeAreaInsets();
-  const { showToast, toast } = useToast();
 
   const [phase,       setPhase]       = useState<Phase>('idle');
   const [sourceUri,   setSourceUri]   = useState<string | null>(null);
   const [books,       setBooks]       = useState<BundleBook[]>([]);
   const [city,        setCity]        = useState(profile?.city || '');
   const [listingType, setListingType] = useState<ListingType>('free');
-  const [condition,   setCondition]   = useState('good');
+  const [condition,      setCondition]      = useState('good');
+  const [shippingType,   setShippingType]   = useState<'pickup' | 'shipping'>('pickup');
+  const [shippingDetails, setShippingDetails] = useState('');
   const [price,       setPrice]       = useState('');
   const [lookingFor,  setLookingFor]  = useState('');
   const [publishing,  setPublishing]  = useState(false);
@@ -992,7 +993,7 @@ export default function PublishScreen() {
   // ── Hide tab bar only during full-screen camera/photo phases ─────────────
   useEffect(() => {
     navigation.setOptions({
-      tabBarStyle: (phase === 'ready' || phase === 'scanning') ? { display: 'none' } : undefined,
+      tabBarStyle: (phase === 'idle' || phase === 'ready' || phase === 'scanning' || phase === 'review') ? { display: 'none' } : undefined,
     });
   }, [phase, navigation]);
 
@@ -1061,7 +1062,6 @@ export default function PublishScreen() {
       setSourceUri(asset.uri);
       setBooks([]);
       setPhase('ready');
-      showToast(isRTL ? 'תמונה עודכנה' : 'Photo updated');
     }
   };
 
@@ -1077,7 +1077,6 @@ export default function PublishScreen() {
       setSourceUri(result.assets[0].uri);
       setBooks([]);
       setPhase('ready');
-      showToast(isRTL ? 'תמונה עודכנה' : 'Photo updated');
     }
   };
 
@@ -1366,9 +1365,11 @@ export default function PublishScreen() {
           city:         city.trim(),
           location_lat: coords?.lat ?? null,
           location_lng: coords?.lng ?? null,
-          images:       imageUrls,
-          user_id:      user!.id,
-          status:       'active',
+          images:          imageUrls,
+          user_id:         user!.id,
+          status:          'active',
+          shipping_type:   shippingType,
+          shipping_details: shippingType === 'shipping' ? shippingDetails.trim() || null : null,
         };
         console.log('[Publish] Inserting:', JSON.stringify(payload));
 
@@ -1444,8 +1445,8 @@ export default function PublishScreen() {
         {/* Full-screen image — contain so nothing is cut off */}
         <Image source={{ uri: sourceUri! }} style={StyleSheet.absoluteFill} resizeMode="contain" />
 
-        {/* Top overlay bar */}
-        <View style={sh.readyTopBar}>
+        {/* Top overlay bar — X on right in RTL */}
+        <View style={[sh.readyTopBar, isRTL && { flexDirection: 'row-reverse' }]}>
           <TouchableOpacity
             style={sh.readyTopBtn}
             onPress={() => { setSourceUri(null); setPhase('idle'); }}
@@ -1453,56 +1454,34 @@ export default function PublishScreen() {
           >
             <Ionicons name="close" size={26} color="#fff" />
           </TouchableOpacity>
-          <TouchableOpacity style={sh.readyTopBtn} onPress={handleChangePhoto} activeOpacity={0.8}>
-            <Ionicons name="images-outline" size={22} color="#fff" />
+          <TouchableOpacity
+            style={[sh.readyTopBtn, rotating && { opacity: 0.4 }]}
+            onPress={() => handleRotate(90)}
+            disabled={rotating}
+            activeOpacity={0.8}
+          >
+            {rotating
+              ? <ActivityIndicator size="small" color="#fff" />
+              : <Ionicons name="reload-outline" size={22} color="#fff" />
+            }
           </TouchableOpacity>
         </View>
 
         {/* Bottom action panel */}
-        <View style={sh.readyBottomPanel}>
-            {/* Rotate icons flanking the Scan CTA */}
-          <View style={sh.readyScanRow}>
-            <TouchableOpacity
-              style={[sh.readyRotateIconBtn, rotating && { opacity: 0.4 }]}
-              onPress={() => handleRotate(-90)}
-              disabled={rotating}
-              activeOpacity={0.75}
-            >
-              {rotating
-                ? <ActivityIndicator size="small" color="#fff" />
-                : <Ionicons name="refresh-outline" size={22} color="#fff"
-                    style={{ transform: [{ scaleX: -1 }] }} />
-              }
-            </TouchableOpacity>
+        <View style={[sh.readyBottomPanel, { paddingBottom: insets.bottom + 20 }]}>
+          <TouchableOpacity style={sh.readyScanBtn} onPress={runScan} activeOpacity={0.88}>
+            <Ionicons name="sparkles" size={20} color="#fff" />
+            <Text style={sh.readyScanText}>
+              {isRTL ? 'סרוק עם AI' : 'Scan with AI'}
+            </Text>
+          </TouchableOpacity>
 
-            <TouchableOpacity style={sh.readyScanBtn} onPress={runScan} activeOpacity={0.88}>
-              <Ionicons name="scan-outline" size={20} color="#fff" />
-              <Text style={sh.readyScanText}>
-                {isRTL ? 'סרוק עם AI' : 'Scan with AI'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[sh.readyRotateIconBtn, rotating && { opacity: 0.4 }]}
-              onPress={() => handleRotate(90)}
-              disabled={rotating}
-              activeOpacity={0.75}
-            >
-              {rotating
-                ? <ActivityIndicator size="small" color="#fff" />
-                : <Ionicons name="refresh-outline" size={22} color="#fff" />
-              }
-            </TouchableOpacity>
-          </View>
-
-          {/* Skip */}
           <TouchableOpacity onPress={skipToManual} activeOpacity={0.7} style={sh.readySkipBtn}>
             <Text style={sh.readySkipText}>
-              {isRTL ? 'המשך בלי סריקה ›' : 'Continue without scanning ›'}
+              {isRTL ? 'המשך ידנית ›' : 'Continue manually ›'}
             </Text>
           </TouchableOpacity>
         </View>
-        <Toast {...toast} />
       </View>
     );
   }
@@ -1536,22 +1515,26 @@ export default function PublishScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
+        {/* ── Fixed top bar ── */}
+        <View style={[sh.reviewBar, { paddingTop: insets.top + 8, flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+          <TouchableOpacity
+            style={sh.reviewBarBtn}
+            onPress={() => navigation.navigate('Home' as any)}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="close" size={24} color={C.text} />
+          </TouchableOpacity>
+          <TouchableOpacity style={sh.reviewBarChangeBtn} onPress={() => { setSourceUri(null); setPhase('idle'); }} activeOpacity={0.85}>
+            <Ionicons name="camera-outline" size={15} color={C.primary} />
+            <Text style={sh.reviewBarChangeTxt}>{isRTL ? 'שנה תמונה' : 'Change photo'}</Text>
+          </TouchableOpacity>
+        </View>
+
         <ScrollView
           style={sh.formScroll}
-          contentContainerStyle={[sh.formContent, { paddingBottom: 120, paddingTop: insets.top + 16 }]}
+          contentContainerStyle={[sh.formContent, { paddingBottom: 120, paddingTop: 16 }]}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Photo strip (compact) */}
-          <View style={sh.photoStrip}>
-            <Image source={{ uri: sourceUri! }} style={sh.photoStripThumb} resizeMode="cover" />
-            <Text style={sh.photoStripLabel} numberOfLines={1}>
-              {isRTL ? 'תמונה שנבחרה' : 'Selected photo'}
-            </Text>
-            <TouchableOpacity style={sh.photoStripChangeBtn} onPress={handleChangePhoto} activeOpacity={0.85}>
-              <Ionicons name="camera-outline" size={14} color={C.primary} />
-              <Text style={sh.photoStripChangeTxt}>{isRTL ? 'שנה' : 'Change'}</Text>
-            </TouchableOpacity>
-          </View>
 
           {/* REVIEW */}
           {(
@@ -1560,7 +1543,7 @@ export default function PublishScreen() {
               <View style={sh.reviewHeader}>
                 <View style={sh.reviewHeaderLeft}>
                   <View style={sh.reviewCountBadge}>
-                    <Ionicons name="library-outline" size={14} color={C.purple} />
+                    <Ionicons name="library-outline" size={14} color={C.primary} />
                     <Text style={sh.reviewCountTxt}>{books.length}</Text>
                   </View>
                   <Text style={sh.reviewHeaderTitle}>
@@ -1605,6 +1588,36 @@ export default function PublishScreen() {
                 )}
                 <Text style={sh.detailsLabel}>{isRTL ? 'מצב ברירת מחדל' : 'Default Condition'}</Text>
                 <ConditionPicker value={condition} onChange={setCondition} isRTL={isRTL} />
+
+                <Text style={sh.detailsLabel}>{isRTL ? 'אספקה' : 'Delivery'}</Text>
+                <View style={sh.chipRow}>
+                  {[
+                    { value: 'pickup',   label: 'Pickup',   labelHe: 'איסוף עצמי' },
+                    { value: 'shipping', label: 'Shipping', labelHe: 'משלוח' },
+                  ].map(opt => {
+                    const active = shippingType === opt.value;
+                    return (
+                      <TouchableOpacity
+                        key={opt.value}
+                        style={[sh.chip, active && sh.chipActive]}
+                        onPress={() => setShippingType(opt.value as 'pickup' | 'shipping')}
+                      >
+                        <Text style={[sh.chipText, active && sh.chipTextActive]}>
+                          {isRTL ? opt.labelHe : opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {shippingType === 'shipping' && (
+                  <TextInput
+                    style={[sh.input, { textAlign: isRTL ? 'right' : 'left' }]}
+                    value={shippingDetails}
+                    onChangeText={setShippingDetails}
+                    placeholder={isRTL ? 'פרטי משלוח (אופציונלי)...' : 'Shipping details (optional)...'}
+                    multiline
+                  />
+                )}
               </View>
 
               {/* 3. Book cards */}
@@ -1630,20 +1643,19 @@ export default function PublishScreen() {
         </ScrollView>
 
         {/* Sticky publish bar */}
-        <View style={sh.stickyBar}>
-          <TouchableOpacity style={sh.stickyTrashBtn} onPress={handleClearConfirm} activeOpacity={0.8}>
-            <Ionicons name="trash-outline" size={17} color={C.red} />
-            <Text style={sh.stickyTrashTxt}>{isRTL ? 'נקה' : 'Clear'}</Text>
-          </TouchableOpacity>
+        <View style={[sh.stickyBar, { paddingBottom: insets.bottom + 12 }]}>
           <TouchableOpacity
             style={[sh.publishBtn, { backgroundColor: LISTING_COLORS[listingType] }, publishing && sh.btnDisabled]}
             onPress={handlePublishAll} disabled={publishing} activeOpacity={0.85}
           >
             {publishing
               ? <ActivityIndicator color={C.white} />
-              : <Text style={sh.publishBtnText}>
-                  {isRTL ? `פרסם ${books.length} ספרים →` : `Publish ${books.length} Books →`}
-                </Text>}
+              : <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={sh.publishBtnText}>
+                    {isRTL ? `פרסם ${books.length} ספרים` : `Publish ${books.length} Books`}
+                  </Text>
+                  <Ionicons name={isRTL ? 'arrow-back' : 'arrow-forward'} size={18} color={C.white} />
+                </View>}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -1714,7 +1726,6 @@ export default function PublishScreen() {
         </Pressable>
       )}
 
-      <Toast {...toast} />
     </View>
   );
 }
@@ -1725,6 +1736,23 @@ const { width: SW } = Dimensions.get('window');
 
 const sh = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
+
+  // Review top bar
+  reviewBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingBottom: 12,
+    backgroundColor: C.white, borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  reviewBarBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  reviewBarChangeBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingVertical: 8, paddingHorizontal: 14,
+    borderRadius: 10, borderWidth: 1, borderColor: C.border,
+  },
+  reviewBarChangeTxt: { fontSize: 13, fontWeight: '600', color: C.primary },
 
   // Auth
   authPrompt:   { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
@@ -1778,23 +1806,16 @@ const sh = StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 44 : 24,
     gap: 12,
   },
-  readyScanRow:    { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  readyRotateIconBtn: {
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)',
-  },
   readyScanBtn:    {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: C.purple, borderRadius: 16, height: 58,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: C.primary, borderRadius: 14, height: 54,
     gap: 10,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 6, elevation: 3,
+    shadowColor: C.primary, shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4, shadowRadius: 8, elevation: 5,
   },
-  readyScanText:   { color: '#fff', fontSize: 18, fontWeight: '600' },
-  readySkipBtn:    { alignItems: 'center', paddingVertical: 4 },
-  readySkipText:   { fontSize: 14, color: 'rgba(255,255,255,0.55)', fontWeight: '500' },
+  readyScanText:   { color: '#fff', fontSize: 18, fontWeight: '700' },
+  readySkipBtn:    { alignItems: 'center', paddingVertical: 6 },
+  readySkipText:   { fontSize: 14, color: 'rgba(255,255,255,0.7)', fontWeight: '500' },
 
   // ── Scanning overlay (full-screen) ─────────────────────────────────────────
   scanningOverlay: {
@@ -1808,8 +1829,8 @@ const sh = StyleSheet.create({
 
   reviewHeader:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   reviewHeaderLeft:  { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  reviewCountBadge:  { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: C.purpleLight, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  reviewCountTxt:    { fontSize: 13, fontWeight: '700', color: C.purple },
+  reviewCountBadge:  { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: C.primaryLight, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  reviewCountTxt:    { fontSize: 13, fontWeight: '700', color: C.primary },
   reviewHeaderTitle: { fontSize: 15, fontWeight: '600', color: C.text },
   rescanBtn:         { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: C.border },
   rescanBtnTxt:      { fontSize: 12, color: C.sub, fontWeight: '600' },
@@ -1863,6 +1884,7 @@ const sh = StyleSheet.create({
   detailsCardTitle: { fontSize: 15, fontWeight: '700', color: C.text, marginBottom: 4 },
   detailsLabel:     { fontSize: 13, fontWeight: '600', color: C.sub, marginTop: 8 },
 
+
   cityRow:     { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, backgroundColor: '#f8fafc', borderRadius: 10, borderWidth: 1, borderColor: C.border },
   cityRowText: { flex: 1, fontSize: 15, color: C.text },
   input:       { backgroundColor: C.white, borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 13, fontSize: 15, color: C.text },
@@ -1883,7 +1905,7 @@ const sh = StyleSheet.create({
   stickyBar:     { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, paddingBottom: 12, backgroundColor: C.white, borderTopWidth: 1, borderTopColor: C.border },
   stickyTrashBtn:{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, height: 48, borderRadius: 12, borderWidth: 1, borderColor: '#fee2e2', backgroundColor: '#fff5f5', justifyContent: 'center' },
   stickyTrashTxt: { fontSize: 13, fontWeight: '600', color: C.red },
-  publishBtn:    { flex: 1, paddingVertical: 15, borderRadius: 12, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.07, shadowRadius: 4, elevation: 2 },
+  publishBtn:    { flex: 1, paddingVertical: 15, borderRadius: 12, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.07, shadowRadius: 4, elevation: 2 },
   publishBtnText:{ color: C.white, fontSize: 16, fontWeight: '600' },
   btnDisabled:   { opacity: 0.5 },
 

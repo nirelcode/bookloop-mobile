@@ -8,6 +8,10 @@ import {
   TextInput,
   Alert,
   RefreshControl,
+  Modal,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -25,7 +29,9 @@ import type { RootStackParamList } from '../types/navigation';
 import i18n from '../lib/i18n';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
-type StatusFilter = 'all' | 'active' | 'unlisted' | 'sold';
+type StatusFilter  = 'all' | 'active' | 'unlisted' | 'sold';
+type ListingFilter = 'all' | 'sale' | 'free' | 'trade';
+type SortKey       = 'date_desc' | 'date_asc' | 'price_asc' | 'price_desc' | 'title_asc';
 
 const C = {
   bg:           '#fafaf9',
@@ -44,6 +50,31 @@ const C = {
   redLight:     '#fee2e2',
 };
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function daysSince(dateStr: string, isRTL: boolean): string {
+  const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86_400_000);
+  if (days === 0) return isRTL ? 'היום' : 'Today';
+  if (days === 1) return isRTL ? 'אתמול' : 'Yesterday';
+  if (days < 30)  return isRTL ? `לפני ${days} ימים` : `${days}d ago`;
+  const mo = Math.floor(days / 30);
+  if (mo < 12)    return isRTL ? `לפני ${mo} חודשים` : `${mo}mo ago`;
+  return isRTL ? `לפני ${Math.floor(mo / 12)} שנים` : `${Math.floor(mo / 12)}y ago`;
+}
+
+function getConditionLabel(condition: string, isRTL: boolean): string {
+  const map: Record<string, [string, string]> = {
+    new:      ['חדש',     'New'],
+    like_new: ['כמו חדש', 'Like new'],
+    good:     ['טוב',     'Good'],
+    fair:     ['סביר',    'Fair'],
+  };
+  const e = map[condition];
+  return e ? (isRTL ? e[0] : e[1]) : condition;
+}
+
+// ── Component ──────────────────────────────────────────────────────────────────
+
 export default function MyBooksScreen() {
   const navigation = useNavigation<Nav>();
   const { user }   = useAuthStore();
@@ -51,22 +82,50 @@ export default function MyBooksScreen() {
   const insets     = useSafeAreaInsets();
 
   const { myBooks: books, setMyBooks } = useDataStore();
-  const [loading, setLoading]       = useState(
+  const [loading,    setLoading]    = useState(
     () => !!user && useDataStore.getState().myBooksFetchedAt === 0
   );
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState(false);
   const { showToast, toast }        = useToast();
 
-  // Filters
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [search, setSearch]             = useState('');
+  // Filters & sort
+  const [statusFilter,  setStatusFilter]  = useState<StatusFilter>('all');
+  const [listingFilter, setListingFilter] = useState<ListingFilter>('all');
+  const [sortKey,       setSortKey]       = useState<SortKey>('date_desc');
+  const [search,        setSearch]        = useState('');
+  const [showSortMenu,  setShowSortMenu]  = useState(false);
 
   // Multi-select
-  const [selectMode, setSelectMode]   = useState(false);
+  const [selectMode,  setSelectMode]  = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // ── Fetch ────────────────────────────────────────────────────────────────
+  // More actions sheet
+  const [moreBook, setMoreBook] = useState<Book | null>(null);
+
+  // Quick price edit
+  const [quickEditBook,  setQuickEditBook]  = useState<Book | null>(null);
+  const [quickEditPrice, setQuickEditPrice] = useState('');
+
+  // Wishlist counts
+  const [wishlistCounts, setWishlistCounts] = useState<Record<string, number>>({});
+
+  // ── Fetch ──────────────────────────────────────────────────────────────────
+
+  const fetchWishlistCounts = useCallback(async (bookIds: string[]) => {
+    if (!bookIds.length) return;
+    try {
+      const { data } = await supabase
+        .from('wishlists')
+        .select('book_id')
+        .in('book_id', bookIds);
+      const counts: Record<string, number> = {};
+      (data || []).forEach((r: { book_id: string }) => {
+        counts[r.book_id] = (counts[r.book_id] || 0) + 1;
+      });
+      setWishlistCounts(counts);
+    } catch { /* non-critical */ }
+  }, []);
 
   const fetchMyBooks = useCallback(async () => {
     if (!user) return;
@@ -78,7 +137,9 @@ export default function MyBooksScreen() {
         .order('created_at', { ascending: false });
       if (error) throw error;
       setFetchError(false);
-      setMyBooks((data as Book[]) || []);
+      const loaded = (data as Book[]) || [];
+      setMyBooks(loaded);
+      fetchWishlistCounts(loaded.map(b => b.id));
     } catch (error) {
       console.error('Error fetching books:', error);
       setFetchError(true);
@@ -87,7 +148,7 @@ export default function MyBooksScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user, setMyBooks]);
+  }, [user, setMyBooks, fetchWishlistCounts]);
 
   useFocusEffect(useCallback(() => {
     const store = useDataStore.getState();
@@ -102,33 +163,39 @@ export default function MyBooksScreen() {
     await fetchMyBooks();
   }, [fetchMyBooks]);
 
-  // ── Derived lists ─────────────────────────────────────────────────────────
+  // ── Derived lists ──────────────────────────────────────────────────────────
 
   const activeBooks   = useMemo(() => books.filter(b => b.status === 'active'),    [books]);
   const unlistedBooks = useMemo(() => books.filter(b => b.status === 'unlisted'),  [books]);
   const soldBooks     = useMemo(() => books.filter(b => b.status === 'completed'), [books]);
 
-  const filteredByStatus = useMemo(() => {
-    if (statusFilter === 'active')   return activeBooks;
-    if (statusFilter === 'unlisted') return unlistedBooks;
-    if (statusFilter === 'sold')     return soldBooks;
-    return books;
-  }, [statusFilter, books, activeBooks, unlistedBooks, soldBooks]);
-
   const displayed = useMemo(() => {
+    let list: Book[] = books;
+    if (statusFilter === 'active')   list = activeBooks;
+    if (statusFilter === 'unlisted') list = unlistedBooks;
+    if (statusFilter === 'sold')     list = soldBooks;
+
+    if (listingFilter !== 'all') list = list.filter(b => b.listing_type === listingFilter);
+
     const q = search.trim().toLowerCase();
-    if (!q) return filteredByStatus;
-    return filteredByStatus.filter(b =>
+    if (q) list = list.filter(b =>
       b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q)
     );
-  }, [filteredByStatus, search]);
 
-  // ── Select mode ───────────────────────────────────────────────────────────
+    return [...list].sort((a, b) => {
+      switch (sortKey) {
+        case 'date_asc':   return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        case 'price_asc':  return (a.price ?? 0) - (b.price ?? 0);
+        case 'price_desc': return (b.price ?? 0) - (a.price ?? 0);
+        case 'title_asc':  return a.title.localeCompare(b.title, isRTL ? 'he' : 'en');
+        default:           return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+    });
+  }, [books, statusFilter, listingFilter, search, sortKey, activeBooks, unlistedBooks, soldBooks, isRTL]);
 
-  const enterSelectMode = (id: string) => {
-    setSelectMode(true);
-    setSelectedIds(new Set([id]));
-  };
+  // ── Select mode ────────────────────────────────────────────────────────────
+
+  const enterSelectMode = (id: string) => { setSelectMode(true); setSelectedIds(new Set([id])); };
 
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
@@ -138,18 +205,13 @@ export default function MyBooksScreen() {
     });
   };
 
-  const cancelSelect = () => {
-    setSelectMode(false);
-    setSelectedIds(new Set());
-  };
+  const cancelSelect = () => { setSelectMode(false); setSelectedIds(new Set()); };
+  const selectAll    = () => { setSelectedIds(new Set(displayed.map(b => b.id))); };
 
-  const selectAll = () => {
-    setSelectedIds(new Set(displayed.map(b => b.id)));
-  };
-
-  // ── Actions ───────────────────────────────────────────────────────────────
+  // ── Actions ────────────────────────────────────────────────────────────────
 
   const handleDelete = (bookId: string) => {
+    setMoreBook(null);
     Alert.alert(i18n.t('myBooks.delete'), i18n.t('myBooks.confirmDelete'), [
       { text: i18n.t('common.cancel'), style: 'cancel' },
       {
@@ -160,9 +222,7 @@ export default function MyBooksScreen() {
             if (error) throw error;
             fetchMyBooks();
             showToast(isRTL ? 'הספר נמחק' : 'Book removed');
-          } catch (e: any) {
-            Alert.alert(i18n.t('common.error'), e.message);
-          }
+          } catch (e: any) { Alert.alert(i18n.t('common.error'), e.message); }
         },
       },
     ]);
@@ -179,15 +239,43 @@ export default function MyBooksScreen() {
           text: i18n.t('common.delete'), style: 'destructive',
           onPress: async () => {
             try {
-              const ids = [...selectedIds];
-              const { error } = await supabase.from('books').delete().in('id', ids);
+              const { error } = await supabase.from('books').delete().in('id', [...selectedIds]);
               if (error) throw error;
-              cancelSelect();
-              fetchMyBooks();
+              cancelSelect(); fetchMyBooks();
               showToast(isRTL ? `${count} ספרים נמחקו` : `${count} books removed`);
-            } catch (e: any) {
-              Alert.alert(i18n.t('common.error'), e.message);
-            }
+            } catch (e: any) { Alert.alert(i18n.t('common.error'), e.message); }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleBulkHide = async () => {
+    const count = selectedIds.size;
+    try {
+      const { error } = await supabase.from('books').update({ status: 'unlisted' }).in('id', [...selectedIds]);
+      if (error) throw error;
+      cancelSelect(); fetchMyBooks();
+      showToast(isRTL ? `${count} ספרים הוסתרו` : `${count} books hidden`);
+    } catch (e: any) { Alert.alert(i18n.t('common.error'), e.message); }
+  };
+
+  const handleBulkSold = () => {
+    const count = selectedIds.size;
+    Alert.alert(
+      isRTL ? 'סמן כנמכרו?' : 'Mark as sold?',
+      isRTL ? `לסמן ${count} ספרים כנמכרו?` : `Mark ${count} book${count !== 1 ? 's' : ''} as sold?`,
+      [
+        { text: i18n.t('common.cancel'), style: 'cancel' },
+        {
+          text: isRTL ? 'נמכר' : 'Mark sold',
+          onPress: async () => {
+            try {
+              const { error } = await supabase.from('books').update({ status: 'completed' }).in('id', [...selectedIds]);
+              if (error) throw error;
+              cancelSelect(); fetchMyBooks();
+              showToast(isRTL ? `${count} ספרים סומנו כנמכרו` : `${count} books marked as sold`);
+            } catch (e: any) { Alert.alert(i18n.t('common.error'), e.message); }
           },
         },
       ]
@@ -195,9 +283,10 @@ export default function MyBooksScreen() {
   };
 
   const handleMarkAsSold = (book: Book) => {
+    setMoreBook(null);
     Alert.alert(
       isRTL ? 'סמן כנמכר?' : 'Mark as sold?',
-      isRTL ? 'הספר יועבר לארכיון "נמכרו" ולא יוצג יותר במודעות' : 'This book will be archived and hidden from listings',
+      isRTL ? 'הספר יועבר לארכיון ולא יוצג במודעות' : 'This book will be archived and hidden from listings',
       [
         { text: i18n.t('common.cancel'), style: 'cancel' },
         {
@@ -208,9 +297,7 @@ export default function MyBooksScreen() {
               if (error) throw error;
               fetchMyBooks();
               showToast(isRTL ? 'הספר סומן כנמכר' : 'Book marked as sold');
-            } catch (e: any) {
-              Alert.alert(i18n.t('common.error'), e.message);
-            }
+            } catch (e: any) { Alert.alert(i18n.t('common.error'), e.message); }
           },
         },
       ],
@@ -218,50 +305,69 @@ export default function MyBooksScreen() {
   };
 
   const handleToggleStatus = async (book: Book) => {
-    // Cycle: active ↔ unlisted (also restores completed → active)
+    setMoreBook(null);
     const next = book.status === 'active' ? 'unlisted' : 'active';
     try {
       const { error } = await supabase.from('books').update({ status: next }).eq('id', book.id);
       if (error) throw error;
       fetchMyBooks();
-      showToast(
-        next === 'active'
-          ? (isRTL ? 'הספר פעיל שוב' : 'Book is active again')
-          : (isRTL ? 'הספר הוסתר' : 'Book hidden from listings')
+      showToast(next === 'active'
+        ? (isRTL ? 'הספר פעיל שוב' : 'Book is active again')
+        : (isRTL ? 'הספר הוסתר' : 'Book hidden from listings')
       );
-    } catch (e: any) {
-      Alert.alert(i18n.t('common.error'), e.message);
-    }
+    } catch (e: any) { Alert.alert(i18n.t('common.error'), e.message); }
   };
 
-  // ── Status badge helpers ──────────────────────────────────────────────────
+  const handleDuplicate = (book: Book) => {
+    setMoreBook(null);
+    navigation.navigate('MainTabs', { screen: 'Publish' });
+    showToast(isRTL ? 'מעביר לפרסום...' : 'Opening publish...');
+  };
+
+  const handleQuickSavePrice = async () => {
+    if (!quickEditBook) return;
+    const price = parseInt(quickEditPrice, 10);
+    if (isNaN(price) || price < 0) {
+      showToast(isRTL ? 'מחיר לא תקין' : 'Invalid price'); return;
+    }
+    try {
+      const { error } = await supabase.from('books').update({ price }).eq('id', quickEditBook.id);
+      if (error) throw error;
+      setMyBooks(books.map(b => b.id === quickEditBook.id ? { ...b, price } : b));
+      setQuickEditBook(null);
+      showToast(isRTL ? 'המחיר עודכן' : 'Price updated');
+    } catch (e: any) { Alert.alert(i18n.t('common.error'), e.message); }
+  };
+
+  // ── Badge helpers ──────────────────────────────────────────────────────────
 
   const getStatusBadge = (status: string) => {
-    if (status === 'active')    return { label: isRTL ? 'פעיל'  : 'Active',  color: C.emerald,  bg: C.emeraldLight };
-    if (status === 'unlisted')  return { label: isRTL ? 'מוסתר' : 'Hidden',  color: C.amber,    bg: C.amberLight   };
-    if (status === 'completed') return { label: isRTL ? 'נמכר'  : 'Sold',    color: C.muted,    bg: '#f5f5f4'      };
+    if (status === 'active')    return { label: isRTL ? 'פעיל'  : 'Active', color: C.emerald, bg: C.emeraldLight };
+    if (status === 'unlisted')  return { label: isRTL ? 'מוסתר' : 'Hidden', color: C.amber,   bg: C.amberLight   };
+    if (status === 'completed') return { label: isRTL ? 'נמכר'  : 'Sold',   color: C.muted,   bg: '#f0f0ef'      };
     return null;
   };
 
   const getListingBadge = (type: string, price?: number) => {
-    if (type === 'sale' && price) return { label: `₪${price}`, color: C.primary };
-    if (type === 'free')          return { label: isRTL ? 'חינם'  : 'Free',  color: C.emerald };
-    if (type === 'trade')         return { label: isRTL ? 'החלפה' : 'Trade', color: C.amber   };
+    if (type === 'sale' && price != null) return { label: `₪${price}`, color: C.primary, bg: C.primaryLight };
+    if (type === 'free')  return { label: isRTL ? 'חינם'  : 'Free',  color: C.emerald, bg: C.emeraldLight };
+    if (type === 'trade') return { label: isRTL ? 'החלפה' : 'Trade', color: C.amber,   bg: C.amberLight   };
     return null;
   };
 
-  // ── Render card ───────────────────────────────────────────────────────────
+  // ── Render card ────────────────────────────────────────────────────────────
 
   const renderBook = useCallback(({ item }: { item: Book }) => {
-    const isSelected  = selectedIds.has(item.id);
-    const statusBadge = getStatusBadge(item.status);
+    const isSelected   = selectedIds.has(item.id);
+    const statusBadge  = getStatusBadge(item.status);
     const listingBadge = getListingBadge(item.listing_type, item.price);
-    const isActive     = item.status === 'active';
+    const isSold       = item.status === 'completed';
+    const wCount       = wishlistCounts[item.id] || 0;
 
     return (
       <TouchableOpacity
         style={[s.card, isSelected && s.cardSelected, isRTL && s.cardRTL]}
-        activeOpacity={0.82}
+        activeOpacity={0.85}
         onPress={() => {
           if (selectMode) { toggleSelect(item.id); return; }
           navigation.navigate('BookDetail', { bookId: item.id });
@@ -269,7 +375,7 @@ export default function MyBooksScreen() {
         onLongPress={() => enterSelectMode(item.id)}
         delayLongPress={300}
       >
-        {/* Select checkbox */}
+        {/* Checkbox (select mode) */}
         {selectMode && (
           <View style={[s.checkWrap, isRTL && s.checkWrapRTL]}>
             <View style={[s.checkbox, isSelected && s.checkboxActive]}>
@@ -279,143 +385,178 @@ export default function MyBooksScreen() {
         )}
 
         {/* Cover */}
-        <View style={[s.coverWrap, selectMode && s.coverWrapSelect]}>
+        <View style={s.coverWrap}>
           {item.images?.[0] ? (
-            <Image source={{ uri: item.images[0] }} style={s.cover} contentFit="cover" transition={200} />
+            <Image
+              source={{ uri: item.images[0] }}
+              style={[s.cover, isSold && s.coverSold]}
+              contentFit="cover"
+              transition={200}
+            />
           ) : (
-            <View style={[s.cover, s.coverFallback]}>
-              <Ionicons name="book-outline" size={26} color={C.muted} />
+            <View style={[s.cover, s.coverFallback, isSold && s.coverSold]}>
+              <Ionicons name="book-outline" size={28} color={C.muted} />
+            </View>
+          )}
+          {isSold && (
+            <View style={s.soldOverlay} pointerEvents="none">
+              <Text style={s.soldOverlayTxt}>{isRTL ? 'נמכר' : 'SOLD'}</Text>
             </View>
           )}
         </View>
 
         {/* Info */}
         <View style={[s.info, isRTL && { alignItems: 'flex-end' }]}>
-          <Text style={[s.bookTitle, isRTL && s.rAlign]} numberOfLines={2}>{item.title}</Text>
-          <Text style={[s.bookAuthor, isRTL && s.rAlign]} numberOfLines={1}>{item.author}</Text>
-
+          {/* Badge row */}
           <View style={[s.badgeRow, isRTL && s.badgeRowRTL]}>
-            {listingBadge && (
-              <Text style={[s.listingBadge, { color: listingBadge.color }]}>{listingBadge.label}</Text>
-            )}
             {statusBadge && (
               <View style={[s.statusPill, { backgroundColor: statusBadge.bg }]}>
                 <View style={[s.statusDot, { backgroundColor: statusBadge.color }]} />
                 <Text style={[s.statusTxt, { color: statusBadge.color }]}>{statusBadge.label}</Text>
               </View>
             )}
+            {listingBadge && (
+              item.listing_type === 'sale' ? (
+                <TouchableOpacity
+                  onPress={() => { setQuickEditBook(item); setQuickEditPrice(String(item.price ?? '')); }}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <View style={[s.pricePill, { backgroundColor: listingBadge.bg, flexDirection: 'row', alignItems: 'center', gap: 3 }]}>
+                    <Text style={[s.pricePillTxt, { color: listingBadge.color }]}>{listingBadge.label}</Text>
+                    <Ionicons name="pencil-outline" size={11} color={C.muted} />
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={[s.pricePill, { backgroundColor: listingBadge.bg }]}>
+                  <Text style={[s.pricePillTxt, { color: listingBadge.color }]}>{listingBadge.label}</Text>
+                </View>
+              )
+            )}
+            {wCount > 0 && (
+              <View style={s.wishPill}>
+                <Ionicons name="heart-outline" size={10} color={C.muted} />
+                <Text style={s.wishTxt}>{wCount}</Text>
+              </View>
+            )}
           </View>
 
-          {item.city ? (
-            <View style={[s.cityRow, isRTL && s.cityRowRTL]}>
-              <Ionicons name="location-outline" size={10} color={C.muted} />
-              <Text style={s.cityTxt} numberOfLines={1}>{item.city}</Text>
+          <Text style={[s.bookTitle, isRTL && s.rAlign]} numberOfLines={2}>{item.title}</Text>
+          <Text style={[s.bookAuthor, isRTL && s.rAlign]} numberOfLines={1}>{item.author}</Text>
+
+          {/* Meta row */}
+          <View style={[s.metaRow, isRTL && s.metaRowRTL]}>
+            <View style={s.condPill}>
+              <Text style={s.condTxt}>{getConditionLabel(item.condition, isRTL)}</Text>
             </View>
-          ) : null}
+            {item.city ? (
+              <>
+                <Text style={s.metaDot}>·</Text>
+                <Ionicons name="location-outline" size={10} color={C.muted} />
+                <Text style={s.metaTxt} numberOfLines={1}>{item.city}</Text>
+              </>
+            ) : null}
+            <Text style={s.metaDot}>·</Text>
+            <Text style={s.metaTxt}>{daysSince(item.created_at, isRTL)}</Text>
+          </View>
         </View>
 
-        {/* Actions — hidden in select mode */}
+        {/* ⋮ button */}
         {!selectMode && (
-          <View style={[s.actions, isRTL && s.actionsRTL]}>
-            <TouchableOpacity
-              style={s.actionBtn}
-              onPress={() => navigation.navigate('EditBook', { bookId: item.id })}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Ionicons name="pencil-outline" size={17} color={C.primary} />
-            </TouchableOpacity>
-            {item.status !== 'completed' && (
-              <TouchableOpacity
-                style={s.actionBtn}
-                onPress={() => handleMarkAsSold(item)}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              >
-                <Ionicons name="checkmark-done-outline" size={17} color={C.emerald} />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={s.actionBtn}
-              onPress={() => handleToggleStatus(item)}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Ionicons
-                name={item.status === 'completed' ? 'refresh-outline' : isActive ? 'eye-off-outline' : 'eye-outline'}
-                size={17}
-                color={item.status === 'completed' ? C.primary : isActive ? C.muted : C.emerald}
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={s.actionBtn}
-              onPress={() => handleDelete(item.id)}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Ionicons name="trash-outline" size={17} color={C.red} />
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            style={[s.dotBtn, isRTL && { marginRight: 0, marginLeft: 6 }]}
+            onPress={() => setMoreBook(item)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityLabel={isRTL ? 'עוד פעולות' : 'More actions'}
+          >
+            <Ionicons name="ellipsis-vertical" size={18} color={C.muted} />
+          </TouchableOpacity>
         )}
       </TouchableOpacity>
     );
-  }, [isRTL, selectMode, selectedIds]);
+  }, [isRTL, selectMode, selectedIds, wishlistCounts]);
 
-  // ── Loading ───────────────────────────────────────────────────────────────
+  // ── Loading ────────────────────────────────────────────────────────────────
 
-  if (loading) {
-    return <View style={s.container}><MyBooksSkeletons /></View>;
-  }
+  if (loading) return <View style={s.container}><MyBooksSkeletons /></View>;
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Tab / filter / sort data ───────────────────────────────────────────────
 
-  const STATUS_TABS: { key: StatusFilter; labelEn: string; labelHe: string; count: number }[] = [
-    { key: 'all',      labelEn: 'All',     labelHe: 'הכל',    count: books.length         },
-    { key: 'active',   labelEn: 'Active',  labelHe: 'פעילים', count: activeBooks.length   },
-    { key: 'unlisted', labelEn: 'Hidden',  labelHe: 'מוסתרים',count: unlistedBooks.length },
-    { key: 'sold',     labelEn: 'Sold',    labelHe: 'נמכרו',  count: soldBooks.length     },
+  const STATUS_TABS: { key: StatusFilter; en: string; he: string; count: number }[] = [
+    { key: 'all',      en: 'All',    he: 'הכל',     count: books.length         },
+    { key: 'active',   en: 'Active', he: 'פעילים',  count: activeBooks.length   },
+    { key: 'unlisted', en: 'Hidden', he: 'מוסתרים', count: unlistedBooks.length },
+    { key: 'sold',     en: 'Sold',   he: 'נמכרו',   count: soldBooks.length     },
   ];
+
+  const LISTING_TABS: { key: ListingFilter; en: string; he: string }[] = [
+    { key: 'all',   en: 'All',   he: 'הכל'   },
+    { key: 'sale',  en: 'Sale',  he: 'מכירה' },
+    { key: 'free',  en: 'Free',  he: 'חינם'  },
+    { key: 'trade', en: 'Trade', he: 'החלפה' },
+  ];
+
+  const SORT_OPTIONS: { key: SortKey; en: string; he: string }[] = [
+    { key: 'date_desc',  en: 'Newest first',    he: 'החדשים ביותר'     },
+    { key: 'date_asc',   en: 'Oldest first',    he: 'הישנים ביותר'    },
+    { key: 'price_asc',  en: 'Price: low–high', he: 'מחיר: נמוך–גבוה' },
+    { key: 'price_desc', en: 'Price: high–low', he: 'מחיר: גבוה–נמוך' },
+    { key: 'title_asc',  en: 'Title A–Z',       he: 'כותרת א–ת'       },
+  ];
+
+  const sortActive = sortKey !== 'date_desc';
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <View style={s.container}>
-      {/* Stats bar */}
-      <View style={s.statsBar}>
-        <View style={s.statChip}>
-          <Text style={[s.statNum, { color: C.primary }]}>{books.length}</Text>
-          <Text style={s.statLbl}>{isRTL ? 'סך הכל' : 'Total'}</Text>
-        </View>
-        <View style={s.statDivider} />
-        <View style={s.statChip}>
-          <Text style={[s.statNum, { color: C.emerald }]}>{activeBooks.length}</Text>
-          <Text style={s.statLbl}>{isRTL ? 'פעילים' : 'Active'}</Text>
-        </View>
-        <View style={s.statDivider} />
-        <View style={s.statChip}>
-          <Text style={[s.statNum, { color: C.amber }]}>{unlistedBooks.length}</Text>
-          <Text style={s.statLbl}>{isRTL ? 'מוסתרים' : 'Hidden'}</Text>
-        </View>
-        <View style={s.statDivider} />
-        <View style={s.statChip}>
-          <Text style={[s.statNum, { color: C.muted }]}>{soldBooks.length}</Text>
-          <Text style={s.statLbl}>{isRTL ? 'נמכרו' : 'Sold'}</Text>
-        </View>
+
+      {/* ── Summary text ── */}
+      <View style={[s.summaryRow, isRTL && { flexDirection: 'row-reverse' }]}>
+        <Text style={s.summaryTxt}>
+          {books.length === 0
+            ? (isRTL ? 'אין לך ספרים עדיין' : 'No books yet')
+            : isRTL
+              ? `${books.length} ספרים · ${activeBooks.length} פעילים${soldBooks.length > 0 ? ` · ${soldBooks.length} נמכרו` : ''}`
+              : `${books.length} book${books.length !== 1 ? 's' : ''} · ${activeBooks.length} active${soldBooks.length > 0 ? ` · ${soldBooks.length} sold` : ''}`
+          }
+        </Text>
+        <TouchableOpacity
+          style={s.addBtn}
+          onPress={() => navigation.navigate('MainTabs', { screen: 'Publish' })}
+        >
+          <Ionicons name="add" size={15} color={C.primary} />
+          <Text style={s.addBtnTxt}>{isRTL ? 'פרסם ספר' : 'Add book'}</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Search */}
-      <View style={s.searchWrap}>
-        <Ionicons name="search-outline" size={16} color={C.muted} />
-        <TextInput
-          style={s.searchInput}
-          placeholder={isRTL ? 'חפש לפי שם ספר או מחבר...' : 'Search by title or author...'}
-          placeholderTextColor={C.muted}
-          value={search}
-          onChangeText={setSearch}
-          textAlign={isRTL ? 'right' : 'left'}
-        />
-        {search.length > 0 && (
-          <TouchableOpacity onPress={() => setSearch('')}>
-            <Ionicons name="close-circle" size={16} color={C.muted} />
-          </TouchableOpacity>
-        )}
+      {/* ── Search + Sort ── */}
+      <View style={s.searchRow}>
+        <View style={s.searchWrap}>
+          <Ionicons name="search-outline" size={16} color={C.muted} />
+          <TextInput
+            style={s.searchInput}
+            placeholder={isRTL ? 'חפש לפי שם ספר או מחבר...' : 'Search by title or author...'}
+            placeholderTextColor={C.muted}
+            value={search}
+            onChangeText={setSearch}
+            textAlign={isRTL ? 'right' : 'left'}
+          />
+          {search.length > 0 && (
+            <TouchableOpacity onPress={() => setSearch('')}>
+              <Ionicons name="close-circle" size={16} color={C.muted} />
+            </TouchableOpacity>
+          )}
+        </View>
+        <TouchableOpacity
+          style={[s.sortBtn, sortActive && s.sortBtnActive]}
+          onPress={() => setShowSortMenu(true)}
+          accessibilityLabel={isRTL ? 'מיון' : 'Sort'}
+        >
+          <Ionicons name="funnel-outline" size={17} color={sortActive ? C.white : C.sub} />
+        </TouchableOpacity>
       </View>
 
-      {/* Status filter tabs */}
+      {/* ── Status tabs ── */}
       <View style={[s.tabsRow, isRTL && { flexDirection: 'row-reverse' }]}>
         {STATUS_TABS.map(t => {
           const active = statusFilter === t.key;
@@ -427,7 +568,7 @@ export default function MyBooksScreen() {
               activeOpacity={0.7}
             >
               <Text style={[s.tabChipTxt, active && s.tabChipTxtActive]}>
-                {isRTL ? t.labelHe : t.labelEn}
+                {isRTL ? t.he : t.en}
               </Text>
               <View style={[s.tabCount, active && s.tabCountActive]}>
                 <Text style={[s.tabCountTxt, active && s.tabCountTxtActive]}>{t.count}</Text>
@@ -437,7 +578,26 @@ export default function MyBooksScreen() {
         })}
       </View>
 
-      {/* Select mode toolbar */}
+      {/* ── Listing type filter ── */}
+      <View style={[s.listingRow, isRTL && { flexDirection: 'row-reverse' }]}>
+        {LISTING_TABS.map(t => {
+          const active = listingFilter === t.key;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              style={[s.listingChip, active && s.listingChipActive]}
+              onPress={() => setListingFilter(t.key)}
+              activeOpacity={0.7}
+            >
+              <Text style={[s.listingChipTxt, active && s.listingChipTxtActive]}>
+                {isRTL ? t.he : t.en}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* ── Select mode toolbar ── */}
       {selectMode && (
         <View style={[s.selectBar, isRTL && { flexDirection: 'row-reverse' }]}>
           <TouchableOpacity onPress={cancelSelect} style={s.selectBarBtn}>
@@ -448,30 +608,26 @@ export default function MyBooksScreen() {
             {isRTL ? `${selectedIds.size} נבחרו` : `${selectedIds.size} selected`}
           </Text>
           <TouchableOpacity onPress={selectAll} style={s.selectBarBtn}>
-            <Text style={[s.selectBarTxt, { color: C.primary }]}>
-              {isRTL ? 'בחר הכל' : 'Select all'}
-            </Text>
+            <Text style={[s.selectBarTxt, { color: C.primary }]}>{isRTL ? 'בחר הכל' : 'Select all'}</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {/* Error banner */}
+      {/* ── Error banner ── */}
       {fetchError && books.length === 0 && (
         <FetchErrorBanner message={isRTL ? 'לא הצלחנו לטעון — משוך לרענון' : "Couldn't load — pull to refresh"} />
       )}
 
-      {/* List */}
+      {/* ── List / empty ── */}
       {displayed.length === 0 ? (
         <View style={s.empty}>
           <View style={[s.emptyIconWrap, { backgroundColor: C.primaryLight }]}>
             <Ionicons name="library-outline" size={40} color={C.primary} />
           </View>
           <Text style={s.emptyTitle}>
-            {search.trim()
-              ? (isRTL ? 'לא נמצאו ספרים' : 'No books found')
-              : (isRTL ? 'אין ספרים כאן' : 'No books here')}
+            {search.trim() ? (isRTL ? 'לא נמצאו ספרים' : 'No books found') : (isRTL ? 'אין ספרים כאן' : 'No books here')}
           </Text>
-          {!search.trim() && statusFilter === 'all' && (
+          {!search.trim() && statusFilter === 'all' && listingFilter === 'all' && (
             <>
               <Text style={s.emptySub}>
                 {isRTL ? 'שתף ספרים שקראת עם אנשים קרובים' : "Share books you've read with people nearby"}
@@ -491,68 +647,234 @@ export default function MyBooksScreen() {
           data={displayed}
           renderItem={renderBook}
           keyExtractor={item => item.id}
-          contentContainerStyle={[s.list, { paddingBottom: selectMode ? 80 : 40 }]}
+          contentContainerStyle={[s.list, { paddingBottom: selectMode ? 104 : 40 }]}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} />}
         />
       )}
 
-      {/* Floating bulk-delete bar */}
+      {/* ── Floating bulk action bar ── */}
       {selectMode && selectedIds.size > 0 && (
         <View style={[s.bulkBar, { bottom: Math.max(insets.bottom, 16) }]}>
-          <TouchableOpacity style={s.bulkDeleteBtn} onPress={handleBulkDelete} activeOpacity={0.85}>
-            <Ionicons name="trash-outline" size={18} color={C.white} />
-            <Text style={s.bulkDeleteTxt}>
-              {isRTL
-                ? `מחק ${selectedIds.size} ספרים`
-                : `Delete ${selectedIds.size} book${selectedIds.size !== 1 ? 's' : ''}`}
+          <TouchableOpacity style={[s.bulkBtn, { backgroundColor: C.amber }]} onPress={handleBulkHide} activeOpacity={0.85}>
+            <Ionicons name="eye-off-outline" size={16} color={C.white} />
+            <Text style={s.bulkBtnTxt}>{isRTL ? 'הסתר' : 'Hide'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.bulkBtn, { backgroundColor: C.emerald }]} onPress={handleBulkSold} activeOpacity={0.85}>
+            <Ionicons name="checkmark-done-outline" size={16} color={C.white} />
+            <Text style={s.bulkBtnTxt}>{isRTL ? 'נמכר' : 'Sold'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.bulkBtn, { backgroundColor: C.red }]} onPress={handleBulkDelete} activeOpacity={0.85}>
+            <Ionicons name="trash-outline" size={16} color={C.white} />
+            <Text style={s.bulkBtnTxt}>
+              {isRTL ? `מחק (${selectedIds.size})` : `Delete (${selectedIds.size})`}
             </Text>
           </TouchableOpacity>
         </View>
       )}
+
+      {/* ── Sort menu modal ── */}
+      <Modal visible={showSortMenu} transparent animationType="fade" onRequestClose={() => setShowSortMenu(false)}>
+        <Pressable style={s.overlay} onPress={() => setShowSortMenu(false)}>
+          <Pressable style={s.sortSheet}>
+            <Text style={s.sortTitle}>{isRTL ? 'מיון לפי' : 'Sort by'}</Text>
+            {SORT_OPTIONS.map(opt => (
+              <TouchableOpacity
+                key={opt.key}
+                style={[s.sortOption, isRTL && { flexDirection: 'row-reverse' }]}
+                onPress={() => { setSortKey(opt.key); setShowSortMenu(false); }}
+              >
+                <Text style={[s.sortOptionTxt, sortKey === opt.key && s.sortOptionActive]}>
+                  {isRTL ? opt.he : opt.en}
+                </Text>
+                {sortKey === opt.key && <Ionicons name="checkmark" size={16} color={C.primary} />}
+              </TouchableOpacity>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── More actions bottom sheet ── */}
+      <Modal visible={!!moreBook} transparent animationType="slide" onRequestClose={() => setMoreBook(null)}>
+        <Pressable style={s.overlay} onPress={() => setMoreBook(null)}>
+          <Pressable style={[s.moreSheet, { paddingBottom: Math.max(insets.bottom + 8, 20) }]}>
+            <View style={s.moreHandle} />
+            {moreBook && (
+              <>
+                <Text style={[s.moreBookTitle, isRTL && s.rAlign]} numberOfLines={1}>
+                  {moreBook.title}
+                </Text>
+
+                {/* Edit */}
+                <TouchableOpacity
+                  style={[s.moreOption, isRTL && { flexDirection: 'row-reverse' }]}
+                  onPress={() => { setMoreBook(null); navigation.navigate('EditBook', { bookId: moreBook.id }); }}
+                >
+                  <View style={[s.moreIcon, { backgroundColor: C.primaryLight }]}>
+                    <Ionicons name="pencil-outline" size={18} color={C.primary} />
+                  </View>
+                  <Text style={s.moreOptionTxt}>{isRTL ? 'ערוך ספר' : 'Edit book'}</Text>
+                </TouchableOpacity>
+
+                {/* Toggle visibility */}
+                <TouchableOpacity
+                  style={[s.moreOption, isRTL && { flexDirection: 'row-reverse' }]}
+                  onPress={() => handleToggleStatus(moreBook)}
+                >
+                  <View style={[s.moreIcon, {
+                    backgroundColor: moreBook.status === 'active' ? '#fff7ed' : C.emeraldLight
+                  }]}>
+                    <Ionicons
+                      name={moreBook.status === 'completed' ? 'arrow-undo-outline' : moreBook.status === 'active' ? 'eye-off-outline' : 'eye-outline'}
+                      size={18}
+                      color={moreBook.status === 'active' ? C.amber : C.emerald}
+                    />
+                  </View>
+                  <Text style={s.moreOptionTxt}>
+                    {moreBook.status === 'completed'
+                      ? (isRTL ? 'פרסם שוב' : 'Re-list')
+                      : moreBook.status === 'active'
+                        ? (isRTL ? 'הסתר מודעה' : 'Hide listing')
+                        : (isRTL ? 'הצג מודעה' : 'Show listing')}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Mark as sold */}
+                {moreBook.status !== 'completed' && (
+                  <TouchableOpacity
+                    style={[s.moreOption, isRTL && { flexDirection: 'row-reverse' }]}
+                    onPress={() => handleMarkAsSold(moreBook)}
+                  >
+                    <View style={[s.moreIcon, { backgroundColor: C.emeraldLight }]}>
+                      <Ionicons name="checkmark-done-outline" size={18} color={C.emerald} />
+                    </View>
+                    <Text style={s.moreOptionTxt}>{isRTL ? 'סמן כנמכר' : 'Mark as sold'}</Text>
+                  </TouchableOpacity>
+                )}
+
+                {/* Duplicate */}
+                <TouchableOpacity
+                  style={[s.moreOption, isRTL && { flexDirection: 'row-reverse' }]}
+                  onPress={() => handleDuplicate(moreBook)}
+                >
+                  <View style={[s.moreIcon, { backgroundColor: '#f5f5f4' }]}>
+                    <Ionicons name="copy-outline" size={18} color={C.sub} />
+                  </View>
+                  <Text style={s.moreOptionTxt}>{isRTL ? 'שכפל מודעה' : 'Duplicate listing'}</Text>
+                </TouchableOpacity>
+
+                {/* Delete */}
+                <TouchableOpacity
+                  style={[s.moreOption, isRTL && { flexDirection: 'row-reverse' }]}
+                  onPress={() => handleDelete(moreBook.id)}
+                >
+                  <View style={[s.moreIcon, { backgroundColor: C.redLight }]}>
+                    <Ionicons name="trash-outline" size={18} color={C.red} />
+                  </View>
+                  <Text style={[s.moreOptionTxt, { color: C.red }]}>{isRTL ? 'מחק ספר' : 'Delete book'}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={s.moreCancelBtn} onPress={() => setMoreBook(null)}>
+                  <Text style={s.moreCancelTxt}>{isRTL ? 'ביטול' : 'Cancel'}</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ── Quick price edit modal ── */}
+      <Modal visible={!!quickEditBook} transparent animationType="fade" onRequestClose={() => setQuickEditBook(null)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <Pressable style={s.overlay} onPress={() => setQuickEditBook(null)}>
+            <Pressable style={s.priceSheet}>
+              <Text style={[s.priceTitle, isRTL && s.rAlign]}>
+                {isRTL ? 'עדכון מחיר' : 'Update price'}
+              </Text>
+              {quickEditBook && (
+                <Text style={[s.priceBookName, isRTL && s.rAlign]} numberOfLines={1}>
+                  {quickEditBook.title}
+                </Text>
+              )}
+              <View style={[s.priceInputRow, isRTL && { flexDirection: 'row-reverse' }]}>
+                <Text style={s.priceCurrency}>₪</Text>
+                <TextInput
+                  style={[s.priceInput, isRTL && s.rAlign]}
+                  value={quickEditPrice}
+                  onChangeText={setQuickEditPrice}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={C.muted}
+                  autoFocus
+                  selectTextOnFocus
+                  textAlign={isRTL ? 'right' : 'left'}
+                />
+              </View>
+              <View style={[s.priceBtns, isRTL && { flexDirection: 'row-reverse' }]}>
+                <TouchableOpacity style={s.priceCancelBtn} onPress={() => setQuickEditBook(null)}>
+                  <Text style={s.priceCancelTxt}>{isRTL ? 'ביטול' : 'Cancel'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.priceSaveBtn} onPress={handleQuickSavePrice}>
+                  <Text style={s.priceSaveTxt}>{isRTL ? 'שמור' : 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <Toast {...toast} />
     </View>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ── Styles ─────────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
 
-  // Stats bar
-  statsBar: {
-    flexDirection: 'row',
+  // ── Summary row ──
+  summaryRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 11,
     backgroundColor: C.white,
-    borderBottomWidth: 1,
-    borderBottomColor: C.border,
-    paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: C.border,
   },
-  statChip:    { flex: 1, alignItems: 'center' },
-  statNum:     { fontSize: 18, fontWeight: '700' },
-  statLbl:     { fontSize: 10, color: C.muted, marginTop: 2 },
-  statDivider: { width: 1, backgroundColor: C.border, marginVertical: 6 },
+  summaryTxt: { fontSize: 13, color: C.sub, fontWeight: '500', flex: 1 },
+  addBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderRadius: 8, borderWidth: 1, borderColor: C.primary + '50',
+    backgroundColor: C.primaryLight,
+  },
+  addBtnTxt: { fontSize: 12, fontWeight: '600', color: C.primary },
 
-  // Search
-  searchWrap: {
+  // ── Search + sort row ──
+  searchRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6,
     backgroundColor: C.white,
-    marginHorizontal: 14, marginTop: 12, marginBottom: 6,
+  },
+  searchWrap: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: C.white,
     borderRadius: 12, borderWidth: 1, borderColor: C.border,
     paddingHorizontal: 12, paddingVertical: 9,
   },
   searchInput: { flex: 1, fontSize: 14, color: C.text, padding: 0 },
+  sortBtn: {
+    width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: C.border, backgroundColor: C.white,
+  },
+  sortBtnActive: { backgroundColor: C.primary, borderColor: C.primary },
 
-  // Filter tabs
+  // ── Status tabs ──
   tabsRow: {
     flexDirection: 'row',
-    paddingHorizontal: 14,
-    paddingBottom: 10,
+    paddingHorizontal: 14, paddingBottom: 10, paddingTop: 6,
     gap: 6,
     backgroundColor: C.white,
-    borderBottomWidth: 1,
-    borderBottomColor: C.border,
+    borderBottomWidth: 1, borderBottomColor: C.border,
   },
   tabChip: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
@@ -560,44 +882,60 @@ const s = StyleSheet.create({
     borderRadius: 20, backgroundColor: '#f5f5f4',
     borderWidth: 1, borderColor: 'transparent',
   },
-  tabChipActive:   { backgroundColor: C.primaryLight, borderColor: C.primary + '40' },
-  tabChipTxt:      { fontSize: 12, fontWeight: '500', color: C.sub },
-  tabChipTxtActive:{ color: C.primary, fontWeight: '600' },
-  tabCount:        { minWidth: 18, height: 18, borderRadius: 9, backgroundColor: '#e7e5e4', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
-  tabCountActive:  { backgroundColor: C.primary },
-  tabCountTxt:     { fontSize: 10, fontWeight: '700', color: C.sub },
+  tabChipActive:     { backgroundColor: C.primaryLight, borderColor: C.primary + '40' },
+  tabChipTxt:        { fontSize: 12, fontWeight: '500', color: C.sub },
+  tabChipTxtActive:  { color: C.primary, fontWeight: '600' },
+  tabCount:          { minWidth: 18, height: 18, borderRadius: 9, backgroundColor: '#e7e5e4', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
+  tabCountActive:    { backgroundColor: C.primary },
+  tabCountTxt:       { fontSize: 10, fontWeight: '700', color: C.sub },
   tabCountTxtActive: { color: C.white },
 
-  // Select mode toolbar
+  // ── Listing type filter ──
+  listingRow: {
+    flexDirection: 'row', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8,
+    backgroundColor: C.bg,
+  },
+  listingChip: {
+    paddingHorizontal: 12, paddingVertical: 5,
+    borderRadius: 20, backgroundColor: '#f5f5f4',
+  },
+  listingChipActive:    { backgroundColor: C.primaryLight, borderColor: C.primary + '40' },
+  listingChipTxt:       { fontSize: 12, fontWeight: '500', color: C.muted },
+  listingChipTxtActive: { color: C.primary, fontWeight: '600' },
+
+  // ── Select mode toolbar ──
   selectBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 10,
-    backgroundColor: C.primaryLight,
-    borderBottomWidth: 1, borderBottomColor: C.primary + '30',
+    backgroundColor: C.primaryLight, borderBottomWidth: 1, borderBottomColor: C.primary + '30',
   },
   selectBarBtn:   { flexDirection: 'row', alignItems: 'center', gap: 4 },
   selectBarTxt:   { fontSize: 14, fontWeight: '600', color: C.sub },
   selectBarCount: { fontSize: 14, fontWeight: '700', color: C.primary },
 
-  // List
+  // ── List ──
   list: { padding: 14 },
 
-  // Card
+  // ── Card ──
   card: {
     flexDirection: 'row',
     backgroundColor: C.white,
-    borderRadius: 14,
-    marginBottom: 10,
+    borderRadius: 16,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: C.border,
-    overflow: 'hidden',
-    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
   },
   cardSelected: { borderColor: C.primary, borderWidth: 1.5 },
   cardRTL:      { flexDirection: 'row-reverse' },
 
-  // Checkbox (select mode)
-  checkWrap:    { paddingLeft: 10 },
+  // Checkbox
+  checkWrap:    { paddingLeft: 10, justifyContent: 'center' },
   checkWrapRTL: { paddingLeft: 0, paddingRight: 10 },
   checkbox: {
     width: 22, height: 22, borderRadius: 11,
@@ -606,58 +944,143 @@ const s = StyleSheet.create({
   },
   checkboxActive: { backgroundColor: C.primary, borderColor: C.primary },
 
-  // Cover
-  coverWrap:       {},
-  coverWrapSelect: {},
-  cover:        { width: 80, height: 108, backgroundColor: C.border },
-  coverFallback:{ justifyContent: 'center', alignItems: 'center' },
+  // Cover — has its own margin + borderRadius so it looks floating inside the card
+  coverWrap:     { margin: 12, borderRadius: 10, overflow: 'hidden' },
+  cover:         { width: 84, height: 116, backgroundColor: C.border },
+  coverFallback: { justifyContent: 'center', alignItems: 'center' },
+  coverSold:     { opacity: 0.45 },
+  soldOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  soldOverlayTxt: {
+    fontSize: 11, fontWeight: '800', color: C.white,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4,
+    transform: [{ rotate: '-20deg' }],
+    overflow: 'hidden',
+  },
 
   // Info
-  info:       { flex: 1, paddingHorizontal: 12, paddingVertical: 10 },
-  bookTitle:  { fontSize: 14, fontWeight: '600', color: C.text, marginBottom: 2, lineHeight: 19 },
-  bookAuthor: { fontSize: 12, color: C.sub, marginBottom: 8 },
+  info: { flex: 1, paddingTop: 14, paddingBottom: 12 },
 
-  badgeRow:    { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
+  // Badge row
+  badgeRow:    { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5, marginBottom: 7 },
   badgeRowRTL: { flexDirection: 'row-reverse' },
-  listingBadge:{ fontSize: 13, fontWeight: '600' },
   statusPill: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 7, paddingVertical: 2, borderRadius: 20,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20,
   },
-  statusDot:  { width: 5, height: 5, borderRadius: 3 },
-  statusTxt:  { fontSize: 11, fontWeight: '600' },
+  statusDot: { width: 5, height: 5, borderRadius: 3 },
+  statusTxt: { fontSize: 11, fontWeight: '600' },
+  pricePill: {
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20,
+  },
+  pricePillTxt: { fontSize: 12, fontWeight: '600' },
+  pencilTxt:    { fontSize: 10, fontWeight: '400', color: C.muted },
+  wishPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 6, paddingVertical: 3, borderRadius: 20,
+    backgroundColor: '#f5f5f4',
+  },
+  wishTxt: { fontSize: 10, color: C.sub, fontWeight: '500' },
 
-  cityRow:    { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 6 },
-  cityRowRTL: { flexDirection: 'row-reverse' },
-  cityTxt:    { fontSize: 11, color: C.muted },
+  // Title + author
+  bookTitle:  { fontSize: 15, fontWeight: '700', color: C.text, marginBottom: 3, lineHeight: 21 },
+  bookAuthor: { fontSize: 12, color: C.sub, marginBottom: 8 },
 
-  // Action buttons (3 stacked vertically on right)
-  actions:    { paddingRight: 10, paddingVertical: 10, gap: 6 },
-  actionsRTL: { paddingRight: 0, paddingLeft: 10 },
-  actionBtn:  { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f4' },
+  // Meta row (condition, city, date)
+  metaRow:    { flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
+  metaRowRTL: { flexDirection: 'row-reverse' },
+  condPill: {
+    backgroundColor: '#f5f5f4', borderRadius: 6,
+    paddingHorizontal: 6, paddingVertical: 2,
+  },
+  condTxt: { fontSize: 10, color: C.sub, fontWeight: '500' },
+  metaTxt: { fontSize: 11, color: C.muted },
+  metaDot: { fontSize: 11, color: C.muted },
+
+  // ⋮ button
+  dotBtn: {
+    width: 36, height: 36, justifyContent: 'center', alignItems: 'center',
+    alignSelf: 'flex-start', marginTop: 10, marginRight: 6,
+  },
 
   // Empty
   empty:         { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
   emptyIconWrap: { width: 88, height: 88, borderRadius: 24, justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
-  emptyTitle:    { fontSize: 17, fontWeight: '600', color: C.text, marginBottom: 8, textAlign: 'center' },
+  emptyTitle:    { fontSize: 17, fontWeight: '700', color: C.text, marginBottom: 8, textAlign: 'center' },
   emptySub:      { fontSize: 14, color: C.muted, textAlign: 'center', lineHeight: 21, marginBottom: 24, paddingHorizontal: 8 },
   publishBtn:    { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.primary, paddingVertical: 13, paddingHorizontal: 28, borderRadius: 12 },
   publishBtnTxt: { color: C.white, fontSize: 15, fontWeight: '600' },
 
-  // Floating bulk delete bar
+  // ── Floating bulk bar ──
   bulkBar: {
-    position: 'absolute',
-    left: 16, right: 16,
-    borderRadius: 14,
+    position: 'absolute', left: 16, right: 16,
+    flexDirection: 'row', gap: 8,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.15, shadowRadius: 10, elevation: 8,
   },
-  bulkDeleteBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: C.red,
-    paddingVertical: 14, borderRadius: 14,
+  bulkBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 13, borderRadius: 12,
   },
-  bulkDeleteTxt: { color: C.white, fontSize: 15, fontWeight: '700' },
+  bulkBtnTxt: { color: C.white, fontSize: 13, fontWeight: '700' },
+
+  // ── Overlay ──
+  overlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+
+  // ── Sort sheet ──
+  sortSheet: {
+    backgroundColor: C.white, borderRadius: 16,
+    margin: 16, padding: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1, shadowRadius: 8, elevation: 6,
+  },
+  sortTitle:        { fontSize: 14, fontWeight: '700', color: C.text, marginBottom: 12 },
+  sortOption:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.border },
+  sortOptionTxt:    { fontSize: 14, color: C.sub },
+  sortOptionActive: { color: C.primary, fontWeight: '600' },
+
+  // ── More actions sheet ──
+  moreSheet: {
+    backgroundColor: C.white,
+    borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingTop: 12, paddingHorizontal: 16,
+    shadowColor: '#000', shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1, shadowRadius: 8, elevation: 6,
+  },
+  moreHandle:    { width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 12 },
+  moreBookTitle: { fontSize: 13, fontWeight: '600', color: C.sub, marginBottom: 12 },
+  moreOption:    { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.border },
+  moreIcon:      { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  moreOptionTxt: { fontSize: 15, color: C.text, fontWeight: '500' },
+  moreCancelBtn: { marginTop: 8, paddingVertical: 14, alignItems: 'center' },
+  moreCancelTxt: { fontSize: 15, fontWeight: '600', color: C.sub },
+
+  // ── Quick price edit ──
+  priceSheet: {
+    backgroundColor: C.white, borderRadius: 16,
+    margin: 16, padding: 20,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12, shadowRadius: 8, elevation: 6,
+  },
+  priceTitle:     { fontSize: 16, fontWeight: '700', color: C.text, marginBottom: 4 },
+  priceBookName:  { fontSize: 12, color: C.muted, marginBottom: 16 },
+  priceInputRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 20 },
+  priceCurrency:  { fontSize: 22, fontWeight: '700', color: C.text },
+  priceInput: {
+    flex: 1, fontSize: 28, fontWeight: '700', color: C.text,
+    borderBottomWidth: 2, borderBottomColor: C.primary, paddingVertical: 4,
+  },
+  priceBtns:      { flexDirection: 'row', gap: 10 },
+  priceCancelBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: C.border, alignItems: 'center' },
+  priceCancelTxt: { fontSize: 15, fontWeight: '600', color: C.sub },
+  priceSaveBtn:   { flex: 1, paddingVertical: 12, borderRadius: 12, backgroundColor: C.primary, alignItems: 'center' },
+  priceSaveTxt:   { fontSize: 15, fontWeight: '600', color: C.white },
 
   rAlign: { textAlign: 'right' },
 });

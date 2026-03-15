@@ -13,7 +13,6 @@ import {
   Platform,
   Pressable,
 } from 'react-native';
-import { compressImage } from '../lib/imageUtils';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,6 +23,7 @@ import i18n from '../lib/i18n';
 import { GENRES_META } from '../constants/books';
 import { CityPickerModal } from '../components/CityPickerModal';
 import { GenrePickerModal } from '../components/GenrePickerModal';
+import { AvatarCropModal } from '../components/AvatarCropModal';
 
 const C = {
   bg: '#fafaf9',
@@ -45,6 +45,7 @@ export default function EditProfileScreen() {
   const [city, setCity]         = useState(profile?.city || '');
   const [avatarUri, setAvatarUri] = useState(profile?.avatar_url || '');
   const [avatarChanged, setAvatarChanged] = useState(false);
+  const [cropUri, setCropUri] = useState<string | null>(null);
   const [loading, setLoading]               = useState(false);
   const [saved, setSaved]                   = useState(false);
   const [showCityPicker, setShowCityPicker]   = useState(false);
@@ -101,9 +102,8 @@ export default function EditProfileScreen() {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 1, // compress manually below
+      allowsEditing: false, // we handle crop ourselves
+      quality: 1,
     });
     if (!result.canceled && result.assets[0]) {
       const asset = result.assets[0];
@@ -116,23 +116,27 @@ export default function EditProfileScreen() {
         );
         return;
       }
-      // Compress to JPEG ≤1920px
-      const compressed = await compressImage(asset.uri);
-      setAvatarUri(compressed);
-      setAvatarChanged(true);
+      // Open custom crop modal
+      setCropUri(asset.uri);
     }
   };
 
-  const uploadAvatar = async (localUri: string): Promise<string> => {
-    const ext  = localUri.split('.').pop()?.split('?')[0] || 'jpg';
-    const path = `avatars/${user!.id}/${Date.now()}.${ext}`;
+  const handleCropConfirm = (croppedUri: string) => {
+    setCropUri(null);
+    setAvatarUri(croppedUri);
+    setAvatarChanged(true);
+  };
 
-    const response = await fetch(localUri);
-    const blob     = await response.blob();
+  const uploadAvatar = async (localUri: string): Promise<string> => {
+    const path = `avatars/${user!.id}/${Date.now()}.jpg`;
+
+    const res = await fetch(localUri);
+    if (!res.ok) throw new Error(`Failed to read image (${res.status})`);
+    const arrayBuffer = await res.arrayBuffer();
 
     const { data, error } = await supabase.storage
       .from('book-images')
-      .upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+      .upload(path, arrayBuffer, { contentType: 'image/jpeg', upsert: true });
 
     if (error) throw error;
 
@@ -144,8 +148,18 @@ export default function EditProfileScreen() {
   };
 
   const handleSave = async () => {
-    if (!name || !city) {
-      Alert.alert(i18n.t('common.error'), i18n.t('auth.fillAllFields'));
+    if (!name.trim()) {
+      Alert.alert(
+        i18n.t('common.error'),
+        isRTL ? 'נא להזין שם' : 'Please enter your name',
+      );
+      return;
+    }
+    if (!city) {
+      Alert.alert(
+        i18n.t('common.error'),
+        isRTL ? 'נא לבחור עיר' : 'Please select your city',
+      );
       return;
     }
 
@@ -169,6 +183,7 @@ export default function EditProfileScreen() {
 
       // Clear dirty state so the beforeRemove guard doesn't block navigation
       initialRef.current = { name, bio, city, avatarUri: finalAvatarUrl || '', favoriteGenres };
+      setAvatarChanged(false);
 
       setSaved(true);
       setTimeout(() => navigation.goBack(), 900);
@@ -265,7 +280,10 @@ export default function EditProfileScreen() {
         <Ionicons name="chevron-down" size={15} color={favoriteGenres.length > 0 ? C.primary : C.muted} />
       </TouchableOpacity>
 
-      <Text style={[s.label, isRTL && s.rAlign]}>{i18n.t('auth.email')}</Text>
+      <View style={[s.labelRow, isRTL && { flexDirection: 'row-reverse' }]}>
+        <Text style={s.label}>{i18n.t('auth.email')}</Text>
+        <Ionicons name="lock-closed-outline" size={12} color={C.muted} style={{ marginTop: 18 }} />
+      </View>
       <TextInput
         style={[s.input, s.inputDisabled, isRTL && s.rInput]}
         value={user?.email || ''}
@@ -304,6 +322,12 @@ export default function EditProfileScreen() {
       isRTL={isRTL}
       onChange={setFavoriteGenres}
       onClose={() => setShowGenrePicker(false)}
+    />
+    <AvatarCropModal
+      uri={cropUri}
+      isRTL={isRTL}
+      onConfirm={handleCropConfirm}
+      onCancel={() => setCropUri(null)}
     />
     {pendingAction && (
       <Pressable style={s.overlayBackdrop} onPress={() => setPendingAction(null)}>
@@ -375,7 +399,8 @@ const s = StyleSheet.create({
   },
   changeLabel: { marginTop: 10, fontSize: 13, color: C.sub, fontWeight: '500' },
 
-  label: { fontSize: 13, fontWeight: '600', color: C.sub, marginBottom: 6, marginTop: 18 },
+  label:    { fontSize: 13, fontWeight: '600', color: C.sub, marginBottom: 6, marginTop: 18 },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   input: {
     backgroundColor: C.white,
     borderWidth: 1,
@@ -387,7 +412,7 @@ const s = StyleSheet.create({
   },
   inputMulti:    { minHeight: 80, paddingTop: 12, textAlignVertical: 'top' },
   rInput:        { textAlign: 'right' },
-  inputDisabled: { backgroundColor: '#f5f5f4', color: C.muted },
+  inputDisabled: { backgroundColor: '#f5f5f4', color: C.muted, borderColor: '#ebebea' },
 
   cityBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,

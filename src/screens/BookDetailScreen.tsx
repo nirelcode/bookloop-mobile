@@ -17,6 +17,7 @@ import {
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import { useRoute, useNavigation } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
 import { Book } from '../types';
@@ -27,7 +28,7 @@ import i18n from '../lib/i18n';
 import { BookDetailSkeleton } from '../components/Skeleton';
 import { useToast, Toast } from '../components/Toast';
 import { ReportModal } from '../components/ReportModal';
-import { GENRE_LABEL_MAP } from '../constants/books';
+import { GENRE_LABEL_MAP, DB_VALUE_TO_LABEL } from '../constants/books';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -48,11 +49,18 @@ const C = {
   pinkLight: '#fce7f3',
 };
 
-const GENRE_LABELS = GENRE_LABEL_MAP;
+// Genre label lookup: DB sub-values first, fall back to top-level keys
+function getGenreLabel(g: string, lang: string): string {
+  const label = DB_VALUE_TO_LABEL[g] ?? GENRE_LABEL_MAP[g];
+  if (!label) return g;
+  return lang === 'he' ? label.he : label.en;
+}
+
 
 export default function BookDetailScreen() {
   const route      = useRoute();
   const navigation = useNavigation<any>();
+  const insets     = useSafeAreaInsets();
   const { bookId } = route.params as { bookId: string };
 
   // Seed instantly from home cache — skeleton only shows on cold load
@@ -77,20 +85,33 @@ export default function BookDetailScreen() {
 
   useEffect(() => {
     const isOwn = book?.user_id === user?.id;
-    navigation.setOptions({
-      headerRight: () => (
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <TouchableOpacity onPress={handleShare} style={{ padding: 8 }}>
-            <Ionicons name="share-outline" size={22} color={C.text} />
+    const actionButtons = (
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <TouchableOpacity onPress={handleShare} style={{ padding: 8 }}>
+          <Ionicons name="share-outline" size={22} color={C.text} />
+        </TouchableOpacity>
+        {!isOwn && (
+          <TouchableOpacity onPress={handleReport} style={{ padding: 8 }}>
+            <Ionicons name="flag-outline" size={20} color={C.muted} />
           </TouchableOpacity>
-          {!isOwn && (
-            <TouchableOpacity onPress={handleReport} style={{ padding: 8 }}>
-              <Ionicons name="flag-outline" size={20} color={C.muted} />
-            </TouchableOpacity>
-          )}
-        </View>
-      ),
-    });
+        )}
+      </View>
+    );
+    if (isRTL) {
+      navigation.setOptions({
+        headerLeft: () => actionButtons,
+        headerRight: () => (
+          <TouchableOpacity onPress={() => navigation.goBack()} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+            <Ionicons name="chevron-forward" size={26} color={C.text} />
+          </TouchableOpacity>
+        ),
+      });
+    } else {
+      navigation.setOptions({
+        headerLeft: undefined,
+        headerRight: () => actionButtons,
+      });
+    }
   }, [book, isRTL, user?.id]);
 
   useEffect(() => {
@@ -208,6 +229,7 @@ export default function BookDetailScreen() {
       navigation.navigate('Chat', {
         recipientId: book.user_id,
         recipientName: book.profiles.name,
+        recipientAvatar: book.profiles.avatar_url ?? undefined,
         bookContext: {
           id: book.id,
           title: book.title,
@@ -304,7 +326,7 @@ export default function BookDetailScreen() {
           )}
 
           {hasMultiple && (
-            <View style={st.imgCounter}>
+            <View style={[st.imgCounter, isRTL ? { right: 14, left: undefined } : { left: 14 }]}>
               <Text style={st.imgCounterTxt}>{imgIndex + 1} / {images.length}</Text>
             </View>
           )}
@@ -319,7 +341,7 @@ export default function BookDetailScreen() {
         <View style={st.content}>
 
           {/* Badges */}
-          <View style={st.badgeRow}>
+          <View style={[st.badgeRow, isRTL && st.rowRev]}>
             <View style={[st.badge, { backgroundColor: listingConf.bg }]}>
               <Text style={[st.badgeTxt, { color: listingConf.text }]}>{listingConf.label}</Text>
             </View>
@@ -331,7 +353,9 @@ export default function BookDetailScreen() {
           </View>
 
           <Text style={[st.title, isRTL && st.rAlign]}>{book.title}</Text>
-          <Text style={[st.author, isRTL && st.rAlign]}>{i18n.t('book.by')} {book.author}</Text>
+          <Text style={[st.author, isRTL && st.rAlign]}>
+            {i18n.t('book.by')} {book.author || (isRTL ? 'מחבר לא ידוע' : 'Unknown')}
+          </Text>
 
           {book.listing_type === 'sale' && book.price && (
             <Text style={st.price}>₪{book.price}</Text>
@@ -342,7 +366,7 @@ export default function BookDetailScreen() {
               {genres.map(g => (
                 <View key={g} style={st.genrePill}>
                   <Text style={st.genrePillTxt}>
-                    {language === 'he' ? (GENRE_LABELS[g]?.he ?? g) : (GENRE_LABELS[g]?.en ?? g)}
+                    {getGenreLabel(g, language)}
                   </Text>
                 </View>
               ))}
@@ -351,59 +375,83 @@ export default function BookDetailScreen() {
 
           {book.listing_type === 'trade' && book.looking_for && (
             <View style={[st.infoBox, { backgroundColor: C.amberLight }]}>
-              <Text style={st.infoBoxLabel}>{i18n.t('book.lookingFor')}</Text>
-              <Text style={[st.infoBoxTxt, { color: '#78350f' }]}>{book.looking_for}</Text>
+              <Text style={[st.infoBoxLabel, isRTL && st.rAlign]}>{i18n.t('book.lookingFor')}</Text>
+              <Text style={[st.infoBoxTxt, { color: '#78350f' }, isRTL && st.rAlign]}>{book.looking_for}</Text>
             </View>
           )}
 
           <View style={st.detailsBox}>
-            <View style={st.detailRow}>
+            <View style={[st.detailRow, isRTL && st.rowRev]}>
               <Ionicons name="location-outline" size={16} color={C.muted} />
-              <Text style={st.detailLabel}>{i18n.t('book.location')}</Text>
-              <Text style={st.detailValue}>{book.city}</Text>
+              <Text style={[st.detailLabel, isRTL && st.rAlign]}>{i18n.t('book.location')}</Text>
+              <Text style={[st.detailValue, isRTL && st.rAlign]}>{book.city}</Text>
             </View>
             <View style={st.detailDivider} />
-            <View style={st.detailRow}>
+            <View style={[st.detailRow, isRTL && st.rowRev]}>
               <Ionicons name="layers-outline" size={16} color={C.muted} />
-              <Text style={st.detailLabel}>{i18n.t('book.conditionLabel')}</Text>
-              <Text style={st.detailValue}>{i18n.t(`book.condition.${book.condition}`)}</Text>
+              <Text style={[st.detailLabel, isRTL && st.rAlign]}>{i18n.t('book.conditionLabel')}</Text>
+              <Text style={[st.detailValue, isRTL && st.rAlign]}>{i18n.t(`book.condition.${book.condition}`)}</Text>
             </View>
+            <View style={st.detailDivider} />
+            <View style={[st.detailRow, isRTL && st.rowRev]}>
+              <Ionicons
+                name={(book as any).shipping_type === 'shipping' ? 'cube-outline' : 'car-outline'}
+                size={16}
+                color={C.muted}
+              />
+              <Text style={[st.detailLabel, isRTL && st.rAlign]}>{isRTL ? 'משלוח' : 'Shipping'}</Text>
+              <Text style={[st.detailValue, isRTL && st.rAlign]}>
+                {(book as any).shipping_type === 'shipping'
+                  ? (isRTL ? 'משלוח זמין' : 'Shipping available')
+                  : (isRTL ? 'איסוף עצמי' : 'Pickup only')}
+              </Text>
+            </View>
+            {(book as any).shipping_type === 'shipping' && (book as any).shipping_details ? (
+              <Text style={[st.shippingDetails, isRTL && st.rAlign]}>{(book as any).shipping_details}</Text>
+            ) : null}
           </View>
 
           {book.description && (
             <View style={st.section}>
-              <Text style={st.sectionTitle}>{i18n.t('book.description')}</Text>
+              <Text style={[st.sectionTitle, isRTL && st.rAlign]}>{i18n.t('book.description')}</Text>
               <Text style={[st.description, isRTL && st.rAlign]}>{book.description}</Text>
             </View>
           )}
 
           {book.profiles && (
             <TouchableOpacity
-              style={st.sellerBox}
+              style={[st.sellerBox, isRTL && st.rowRev]}
               activeOpacity={0.75}
               onPress={() => navigation.navigate('SellerProfile', {
                 sellerId: book.user_id,
                 sellerName: book.profiles!.name,
               })}
             >
-              <View style={st.sellerLeft}>
+              <View style={[st.sellerLeft, isRTL && st.rowRev]}>
                 <View style={st.sellerAvatar}>
-                  <Text style={st.sellerInitial}>
-                    {book.profiles.name?.charAt(0).toUpperCase() || 'U'}
-                  </Text>
+                  {book.profiles.avatar_url ? (
+                    <Image
+                      source={{ uri: book.profiles.avatar_url }}
+                      style={{ width: 48, height: 48, borderRadius: 24 }}
+                    />
+                  ) : (
+                    <Text style={st.sellerInitial}>
+                      {book.profiles.name?.charAt(0).toUpperCase() || 'U'}
+                    </Text>
+                  )}
                 </View>
                 <View>
-                  <Text style={st.sellerLbl}>{i18n.t('book.seller')}</Text>
-                  <Text style={st.sellerName}>{book.profiles.name}</Text>
+                  <Text style={[st.sellerLbl, isRTL && st.rAlign]}>{i18n.t('book.seller')}</Text>
+                  <Text style={[st.sellerName, isRTL && st.rAlign]}>{book.profiles.name}</Text>
                   {book.profiles.city && (
-                    <View style={st.sellerCityRow}>
+                    <View style={[st.sellerCityRow, isRTL && st.rowRev]}>
                       <Ionicons name="location-outline" size={12} color={C.muted} />
                       <Text style={st.sellerCity}>{book.profiles.city}</Text>
                     </View>
                   )}
                 </View>
               </View>
-              <View style={st.sellerRight}>
+              <View style={[st.sellerRight, isRTL && st.rowRev]}>
                 <Text style={st.viewProfile}>{isRTL ? 'פרופיל' : 'Profile'}</Text>
                 <Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={16} color={C.primary} />
               </View>
@@ -458,14 +506,14 @@ export default function BookDetailScreen() {
 
       {/* ── Sticky bottom CTA bar ── */}
       {!isOwn && (
-        <View style={st.stickyBar}>
+        <View style={[st.stickyBar, { paddingBottom: insets.bottom + 12 }, isRTL && st.rowRev]}>
           <TouchableOpacity style={st.wishlistBtnBar} onPress={toggleWishlist} disabled={wishlistLoading}>
             {wishlistLoading
               ? <ActivityIndicator size="small" color={C.pink} />
               : <Ionicons name={inWishlist ? 'heart' : 'heart-outline'} size={22} color={inWishlist ? C.pink : C.sub} />
             }
           </TouchableOpacity>
-          <TouchableOpacity style={st.contactBtn} onPress={handleContactSeller} activeOpacity={0.85}>
+          <TouchableOpacity style={[st.contactBtn, isRTL && st.rowRev]} onPress={handleContactSeller} activeOpacity={0.85}>
             <Ionicons name="chatbubble-outline" size={18} color={C.white} />
             <Text style={st.contactTxt}>{i18n.t('book.contactSeller')}</Text>
           </TouchableOpacity>
@@ -473,7 +521,7 @@ export default function BookDetailScreen() {
       )}
 
       {/* ── Full-screen image zoom modal ── */}
-      <Modal visible={zoomVisible} transparent animationType="fade" statusBarTranslucent>
+      <Modal visible={zoomVisible} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setZoomVisible(false)}>
         <View style={st.zoomBg}>
           <Image
             source={{ uri: images[imgIndex] }}
@@ -535,7 +583,7 @@ const st = StyleSheet.create({
   dot:       { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.5)' },
   dotActive: { backgroundColor: '#ffffff', width: 18 },
   imgCounter: {
-    position: 'absolute', top: 14, left: 14,
+    position: 'absolute', top: 14,
     backgroundColor: 'rgba(0,0,0,0.4)',
     borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4,
   },
@@ -555,12 +603,12 @@ const st = StyleSheet.create({
 
   title:  { fontSize: 24, fontWeight: '700', color: C.text, marginBottom: 5, lineHeight: 30 },
   author: { fontSize: 16, color: C.sub, marginBottom: 12 },
-  price:  { fontSize: 28, fontWeight: '700', color: C.primary, marginBottom: 16 },
+  price:  { fontSize: 28, fontWeight: '600', color: C.primary, marginBottom: 16 },
 
   genreRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 16 },
   rowRev:   { flexDirection: 'row-reverse' },
-  genrePill:   { backgroundColor: C.primaryLight, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
-  genrePillTxt:{ fontSize: 12, fontWeight: '600', color: C.primary },
+  genrePill:   { backgroundColor: '#f5f5f4', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+  genrePillTxt:{ fontSize: 12, fontWeight: '500', color: C.sub },
 
   infoBox:      { padding: 14, borderRadius: 14, marginBottom: 16 },
   infoBoxLabel: { fontSize: 11, fontWeight: '700', color: '#92400e', textTransform: 'uppercase', marginBottom: 4 },
@@ -573,8 +621,9 @@ const st = StyleSheet.create({
   },
   detailRow:     { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13 },
   detailDivider: { height: 1, backgroundColor: C.border },
-  detailLabel:   { fontSize: 13, fontWeight: '600', color: C.muted, width: 90 },
-  detailValue:   { fontSize: 14, color: C.text, flex: 1, fontWeight: '500' },
+  detailLabel:     { fontSize: 13, fontWeight: '600', color: C.muted, width: 90 },
+  detailValue:     { fontSize: 14, color: C.text, flex: 1, fontWeight: '500' },
+  shippingDetails: { fontSize: 13, color: C.sub, paddingHorizontal: 2, paddingBottom: 10, lineHeight: 18 },
 
   section:      { marginBottom: 20 },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: C.text, marginBottom: 8 },
@@ -598,12 +647,12 @@ const st = StyleSheet.create({
   sellerCityRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
   sellerCity:    { fontSize: 12, color: C.muted },
   sellerRight:   { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  viewProfile:   { fontSize: 13, fontWeight: '600', color: C.primary },
+  viewProfile:   { fontSize: 13, fontWeight: '600', color: C.sub },
 
   // ── Sticky bottom bar ──
   stickyBar: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 16, paddingVertical: 12,
+    paddingHorizontal: 16, paddingTop: 12,
     backgroundColor: C.white, borderTopWidth: 1, borderTopColor: C.border,
   },
   wishlistBtnBar: {
@@ -630,7 +679,7 @@ const st = StyleSheet.create({
   simBody:   { padding: 8 },
   simTitle:  { fontSize: 12, fontWeight: '600', color: C.text, lineHeight: 16, marginBottom: 2 },
   simAuthor: { fontSize: 10, color: C.sub, marginBottom: 4 },
-  simPrice:  { fontSize: 12, fontWeight: '700' },
+  simPrice:  { fontSize: 12, fontWeight: '600' },
 
   // ── Zoom modal ──
   zoomBg: {

@@ -6,7 +6,8 @@ import { NavigationContainer, createNavigationContainerRef } from '@react-naviga
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 // expo-notifications is loaded lazily below (only in non-Expo-Go builds).
@@ -17,7 +18,7 @@ import { useDataStore } from '../stores/dataStore';
 import { useLanguageStore } from '../stores/languageStore';
 import { useLocationStore } from '../stores/locationStore';
 import { supabase } from '../lib/supabase';
-import { getChatReadAt, registerUnreadRefresh } from '../lib/chatRead';
+import { getChatReadAt, getUserBaselineTime, registerUnreadRefresh } from '../lib/chatRead';
 import i18n from '../lib/i18n';
 import type { RootStackParamList, MainTabParamList } from '../types/navigation';
 import { registerForPushNotificationsAsync } from '../lib/notifications';
@@ -59,10 +60,10 @@ function useUnreadCount(userId: string | undefined) {
   const refresh = useCallback(async () => {
     if (!userId) return;
     try {
-      // Step 1: get all chats for this user (include last_message_at as fallback baseline)
+      // Step 1: get all chats for this user
       const { data: myChats } = await supabase
         .from('chats')
-        .select('id, last_message_at')
+        .select('id')
         .or(`buyer_id.eq.${userId},seller_id.eq.${userId}`);
 
       if (!myChats?.length) {
@@ -71,28 +72,39 @@ function useUnreadCount(userId: string | undefined) {
         return;
       }
 
-      // Step 2: for each chat, count messages from others newer than last read.
-      // Use last_message_at as the fallback so a fresh install doesn't mark all
-      // historical messages as unread (only messages after first local open count).
-      const chatCounts = await Promise.all(
-        myChats.map(async ({ id: chatId, last_message_at }) => {
-          const readAt = await getChatReadAt(chatId, last_message_at ?? undefined);
-          const { count: n } = await supabase
-            .from('messages')
-            .select('id', { count: 'exact', head: true })
-            .eq('chat_id', chatId)
-            .neq('sender_id', userId)
-            .gt('created_at', readAt);
-          return n ?? 0;
-        })
-      );
+      // Step 2: read all per-chat timestamps in one AsyncStorage call,
+      // then fetch all unread messages since baseline in a single Supabase query.
+      const chatIds = myChats.map(c => c.id);
+      const baselineTime = await getUserBaselineTime(userId);
 
-      // Save per-chat counts to dataStore so MessagesScreen can show badges
+      // Batch-read all readAt timestamps at once
+      const keys = chatIds.map(id => `bookloop_chat_read_${id}`);
+      const pairs = await AsyncStorage.multiGet(keys);
+      const readAtMap: Record<string, string> = {};
+      pairs.forEach(([key, val]) => {
+        const chatId = key.replace('bookloop_chat_read_', '');
+        readAtMap[chatId] = val ?? baselineTime;
+      });
+
+      // Single query: all messages from others across all chats since baseline
+      const { data: unreadMsgs } = await supabase
+        .from('messages')
+        .select('chat_id, created_at')
+        .in('chat_id', chatIds)
+        .neq('sender_id', userId)
+        .gt('created_at', baselineTime);
+
+      // Count per chat client-side using individual readAt thresholds
       const perChatCounts: Record<string, number> = {};
-      myChats.forEach(({ id }, i) => { perChatCounts[id] = chatCounts[i]; });
-      useDataStore.getState().setUnreadCounts(perChatCounts);
+      chatIds.forEach(id => { perChatCounts[id] = 0; });
+      (unreadMsgs ?? []).forEach(({ chat_id, created_at }) => {
+        if (created_at > (readAtMap[chat_id] ?? baselineTime)) {
+          perChatCounts[chat_id] = (perChatCounts[chat_id] ?? 0) + 1;
+        }
+      });
 
-      setCount(chatCounts.reduce((a, b) => a + b, 0));
+      useDataStore.getState().setUnreadCounts(perChatCounts);
+      setCount(Object.values(perChatCounts).reduce((a, b) => a + b, 0));
     } catch {}
   }, [userId]);
 
@@ -127,11 +139,10 @@ function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const { unreadCount } = useUnreadCount(user?.id);
 
   const [barWidth, setBarWidth] = useState(0);
-  const dotAnim = useRef(new Animated.Value(state.index)).current;
+  const pillAnim = useRef(new Animated.Value(state.index)).current;
 
-  // Slide dot to the new active tab on change
   useEffect(() => {
-    Animated.spring(dotAnim, {
+    Animated.spring(pillAnim, {
       toValue: state.index,
       useNativeDriver: true,
       tension: 70,
@@ -144,19 +155,18 @@ function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const tabBarStyle   = (activeOptions as any).tabBarStyle;
   if (tabBarStyle?.display === 'none') return null;
 
-  const TAB_COUNT = state.routes.length;
-  const tabWidth  = barWidth / TAB_COUNT;
+  const TAB_COUNT  = state.routes.length;
+  const tabWidth   = barWidth / TAB_COUNT;
+  const PILL_W     = 68;
+  const showPill   = barWidth > 0 && state.routes[state.index]?.name !== 'Publish';
 
-  // Map logical index → visual X center, accounting for RTL tab reversal
-  const dotTranslateX = barWidth > 0 ? dotAnim.interpolate({
+  const pillTranslateX = pillAnim.interpolate({
     inputRange:  state.routes.map((_, i) => i),
     outputRange: state.routes.map((_, i) => {
       const visIdx = isRTL ? (TAB_COUNT - 1 - i) : i;
-      return visIdx * tabWidth + tabWidth / 2 - 2; // center the 4px dot
+      return visIdx * tabWidth + tabWidth / 2 - PILL_W / 2;
     }),
-  }) : dotAnim;
-
-  const showSlidingDot = state.routes[state.index]?.name !== 'Publish';
+  });
 
   const items = state.routes.map((route, index) => {
     const focused   = state.index === index;
@@ -185,10 +195,9 @@ function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
       style={[tb.bar, { paddingBottom: insets.bottom, height: 62 + insets.bottom }]}
       onLayout={e => setBarWidth(e.nativeEvent.layout.width)}
     >
-      {/* Sliding dot — single Animated.View that glides between tabs */}
-      {barWidth > 0 && showSlidingDot && (
+      {showPill && (
         <Animated.View
-          style={[tb.slidingDot, { bottom: insets.bottom + 2, transform: [{ translateX: dotTranslateX }] }]}
+          style={[tb.slidingPill, { bottom: insets.bottom + 6, transform: [{ translateX: pillTranslateX }] }]}
         />
       )}
 
@@ -199,11 +208,15 @@ function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
 
         if (isPublish) {
           return (
-            <TouchableOpacity key={key} style={tb.tab} onPress={onPress} activeOpacity={0.7}>
-              <View style={tb.iconWrap}>
-                <Ionicons name="add-circle" size={30} color={TAB_EMERALD} />
-              </View>
-              <Text style={[tb.label, { color: TAB_EMERALD }]}>{label}</Text>
+            <TouchableOpacity key={key} style={tb.tab} onPress={onPress} activeOpacity={0.8}>
+              <LinearGradient
+                colors={['#2563eb', '#7c3aed']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={tb.publishBtn}
+              >
+                <Ionicons name="add" size={26} color="#fff" />
+              </LinearGradient>
             </TouchableOpacity>
           );
         }
@@ -212,17 +225,19 @@ function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
 
         return (
           <TouchableOpacity key={key} style={tb.tab} onPress={onPress} activeOpacity={0.7}>
-            <View style={tb.iconWrap}>
-              {options.tabBarIcon?.({ focused, color, size: 23 })}
-              {showBadge && (
-                <View style={tb.badge}>
-                  <Text style={tb.badgeTxt}>
-                    {unreadCount > 9 ? '9+' : String(unreadCount)}
-                  </Text>
-                </View>
-              )}
+            <View style={tb.pillWrap}>
+              <View style={tb.iconWrap}>
+                {options.tabBarIcon?.({ focused, color, size: 23 })}
+                {showBadge && (
+                  <View style={tb.badge}>
+                    <Text style={tb.badgeTxt}>
+                      {unreadCount > 9 ? '9+' : String(unreadCount)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <Text style={[tb.label, { color }]}>{label}</Text>
             </View>
-            <Text style={[tb.label, { color }]}>{label}</Text>
           </TouchableOpacity>
         );
       })}
@@ -239,16 +254,31 @@ const tb = StyleSheet.create({
     height: 62,
     paddingTop: 6,
   },
-  tab:      { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2 },
+  tab:      { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  pillWrap: { alignItems: 'center', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20, gap: 2 },
+  slidingPill: {
+    position: 'absolute',
+    width: 68,
+    height: 50,
+    borderRadius: 20,
+    backgroundColor: '#eff6ff',
+    left: 0,
+  },
   iconWrap: { alignItems: 'center' },
   label:    { fontSize: 10, fontWeight: '600' },
-  slidingDot: {
-    position: 'absolute',
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: TAB_BLUE,
-    left: 0,
+
+  publishBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -8,
+    shadowColor: '#4f46e5',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 8,
+    elevation: 6,
   },
 
   // Unread badge
@@ -272,22 +302,29 @@ const tb = StyleSheet.create({
 // ── Tab navigator ──────────────────────────────────────────────────────────
 function MainTabs() {
   const language = useLanguageStore(s => s.language);
+  const [activeTab, setActiveTab] = useState('Home');
 
   return (
     <View style={{ flex: 1 }}>
-      <AppHeader />
+      {activeTab !== 'Publish' && <AppHeader />}
       <Tab.Navigator
         key={language}
         tabBar={props => <AppTabBar {...props} />}
         screenOptions={{ headerShown: false }}
+        screenListeners={{
+          focus: (e) => {
+            const name = (e.target as string)?.split('-')[0];
+            if (name) setActiveTab(name);
+          },
+        }}
       >
       <Tab.Screen
         name="Home"
         component={HomeScreen}
         options={{
           tabBarLabel: i18n.t('nav.home'),
-          tabBarIcon: ({ focused, color, size }) => (
-            <Ionicons name={focused ? 'home' : 'home-outline'} size={size} color={color} />
+          tabBarIcon: ({ color, size }) => (
+            <Feather name="home" size={size} color={color} />
           ),
         }}
       />
@@ -296,8 +333,8 @@ function MainTabs() {
         component={CatalogScreen}
         options={{
           tabBarLabel: i18n.t('nav.catalog'),
-          tabBarIcon: ({ focused, color, size }) => (
-            <Ionicons name={focused ? 'search' : 'search-outline'} size={size} color={color} />
+          tabBarIcon: ({ color, size }) => (
+            <Feather name="search" size={size} color={color} />
           ),
         }}
       />
@@ -314,8 +351,8 @@ function MainTabs() {
         component={MessagesScreen}
         options={{
           tabBarLabel: i18n.t('nav.messages'),
-          tabBarIcon: ({ focused, color, size }) => (
-            <Ionicons name={focused ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'} size={size} color={color} />
+          tabBarIcon: ({ color, size }) => (
+            <Feather name="message-square" size={size} color={color} />
           ),
         }}
       />
@@ -324,8 +361,8 @@ function MainTabs() {
         component={ProfileScreen}
         options={{
           tabBarLabel: i18n.t('nav.profile'),
-          tabBarIcon: ({ focused, color, size }) => (
-            <Ionicons name={focused ? 'person' : 'person-outline'} size={size} color={color} />
+          tabBarIcon: ({ color, size }) => (
+            <Feather name="user" size={size} color={color} />
           ),
         }}
       />
@@ -338,6 +375,7 @@ function MainTabs() {
 export function AppNavigator() {
   const { loading, user, profile } = useAuthStore();
   const { setCoords, setPermission } = useLocationStore();
+  const { isRTL, language } = useLanguageStore();
 
   const [slidesSeen, setSlidesSeen] = useState<boolean | null>(null);
   const [setupDone,  setSetupDone]  = useState<boolean | null>(null);
@@ -356,18 +394,27 @@ export function AppNavigator() {
   useEffect(() => {
     if (!user) { setSetupDone(null); return; }
     AsyncStorage.getItem(SETUP_DONE_KEY).then(v => {
-      if (v === 'true') { setSetupDone(true); return; }
-      // If profile is loaded and already has genres, skip setup
-      if (profile && profile.favorite_genres && profile.favorite_genres.length > 0) {
+      if (v === 'true') {
+        // Wait for profile to load before trusting AsyncStorage — if profile is null
+        // the city check below can't run and we'd skip setup incorrectly.
+        if (profile === null) return;
+        // Require city — Google/webapp users may have genres but no city set yet,
+        // and a freshly re-registered account will have an empty profile.
+        if (!profile.city) { setSetupDone(false); return; }
+        setSetupDone(true);
+        return;
+      }
+      // If profile is loaded and already has genres AND city, skip setup
+      if (profile && profile.city && profile.favorite_genres && profile.favorite_genres.length > 0) {
         AsyncStorage.setItem(SETUP_DONE_KEY, 'true');
         setSetupDone(true);
         return;
       }
-      // Profile not loaded yet or no genres → show setup if profile is loaded
+      // Profile not loaded yet or missing city/genres → show setup if profile is loaded
       if (profile !== null) setSetupDone(false);
       // If profile is still null, wait for it (effect re-runs when profile loads)
     });
-  }, [user?.id, profile?.favorite_genres?.length]);
+  }, [user?.id, profile?.city, profile?.favorite_genres?.length]);
 
   // ── Prefetch key data during splash window ───────────────────────────────
   useEffect(() => {
@@ -396,14 +443,15 @@ export function AppNavigator() {
       .then(({ data }) => { if (data) store.setBlockedIds(data.map(r => r.blocked_id)); });
   }, [loading, user?.id]);
 
-  // ── Location permission ──────────────────────────────────────────────────
+  // ── Location: only check existing permission on startup (never prompt) ───
+  // Actual permission request is deferred to when the user taps "Near Me".
   useEffect(() => {
     (async () => {
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        const { status } = await Location.getForegroundPermissionsAsync();
         setPermission(status === 'granted' ? 'granted' : 'denied');
         if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
           setCoords({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
         }
       } catch {}
@@ -468,16 +516,30 @@ export function AppNavigator() {
   // 4. Main app
   return (
     <NavigationContainer ref={navigationRef}>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator
+        key={language}
+        screenOptions={({ navigation: nav }) => ({
+          headerShown: false,
+          // RTL: remove default left-pointing back button; add right-pointing one on the right
+          ...(isRTL ? {
+            headerLeft: () => null,
+            headerRight: () => (
+              <TouchableOpacity onPress={() => nav.goBack()} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+                <Ionicons name="chevron-forward" size={26} color="#1c1917" />
+              </TouchableOpacity>
+            ),
+          } : {}),
+        })}
+      >
         <Stack.Screen name="MainTabs"      component={MainTabs} />
-        <Stack.Screen name="BookDetail"    component={BookDetailScreen}    options={{ headerShown: true, title: i18n.t('book.description') }} />
+        <Stack.Screen name="BookDetail"    component={BookDetailScreen}    options={{ headerShown: true, title: '' }} />
         <Stack.Screen name="SellerProfile" component={SellerProfileScreen} options={{ headerShown: true, title: '' }} />
         <Stack.Screen name="Settings"      component={SettingsScreen}      options={{ headerShown: true, title: i18n.t('settings.title') }} />
         <Stack.Screen name="MyBooks"       component={MyBooksScreen}       options={{ headerShown: true, title: i18n.t('myBooks.title') }} />
         <Stack.Screen name="Chat"          component={ChatScreen}          options={{ headerShown: true }} />
         <Stack.Screen name="EditProfile"   component={EditProfileScreen}   options={{ headerShown: true, title: i18n.t('settings.editProfile') }} />
         <Stack.Screen name="Wishlist"      component={WishlistScreen}      options={{ headerShown: true, title: i18n.t('wishlist.title') }} />
-        <Stack.Screen name="EditBook"      component={EditBookScreen}      options={{ headerShown: true, title: i18n.t('myBooks.edit') || 'Edit Book' }} />
+        <Stack.Screen name="EditBook"      component={EditBookScreen}      options={{ headerShown: true, title: i18n.t('myBooks.edit') }} />
         <Stack.Screen name="BlockedUsers"  component={BlockedUsersScreen}  options={{ headerShown: true, title: '' }} />
       </Stack.Navigator>
     </NavigationContainer>

@@ -18,6 +18,7 @@ import { useLanguageStore } from '../stores/languageStore';
 import { useLocationStore } from '../stores/locationStore';
 import { haversineKm, formatDistance } from '../lib/locationUtils';
 import { CITY_COORDS } from '../constants/categoryGenreMap';
+import { GENRE_LABEL_MAP, DB_VALUE_TO_LABEL } from '../constants/books';
 import type { HomeScreenNavigationProp } from '../types/navigation';
 import { HomeSkeletons } from '../components/Skeleton';
 import { useDataStore } from '../stores/dataStore';
@@ -27,14 +28,16 @@ import { FetchErrorBanner } from '../components/Toast';
 function getTimeGreeting(isRTL: boolean): string {
   const h = new Date().getHours();
   if (isRTL) {
+    if (h < 2)  return 'לילה טוב';
     if (h < 12) return 'בוקר טוב';
     if (h < 17) return 'צהריים טובים';
-    if (h < 21) return 'ערב טוב';
+    if (h < 23) return 'ערב טוב';
     return 'לילה טוב';
   }
+  if (h < 2)  return 'Good night';
   if (h < 12) return 'Good morning';
   if (h < 17) return 'Good afternoon';
-  if (h < 21) return 'Good evening';
+  if (h < 23) return 'Good evening';
   return 'Good night';
 }
 
@@ -67,39 +70,17 @@ const C = {
 const CARD_W = 156;
 
 // ── Condition badge helpers ────────────────────────────────────────────────
-const COND_BG:    Record<string, string> = { new: '#d1fae5', like_new: '#dbeafe', good: '#f5f5f4', fair: '#fef3c7' };
-const COND_COLOR: Record<string, string> = { new: '#059669', like_new: '#2563eb', good: '#78716c', fair: '#d97706' };
+const COND_BG:    Record<string, string> = { new: '#d1fae5', like_new: '#ede9fe', good: '#f5f5f4', fair: '#fef3c7' };
+const COND_COLOR: Record<string, string> = { new: '#059669', like_new: '#7c3aed', good: '#78716c', fair: '#d97706' };
 const COND_EN:    Record<string, string> = { new: 'New', like_new: 'Like New', good: 'Good', fair: 'Fair' };
 const COND_HE:    Record<string, string> = { new: 'חדש', like_new: 'כמו חדש', good: 'טוב', fair: 'סביר' };
 
-// ── Genre labels ──────────────────────────────────────────────────────────
-const GENRE_LABELS: Record<string, { en: string; he: string }> = {
-  fiction: { en: 'Fiction', he: 'סיפורת' },
-  mystery: { en: 'Mystery', he: 'מתח' },
-  romance: { en: 'Romance', he: 'רומנטיקה' },
-  'sci-fi': { en: 'Sci-Fi', he: 'מדע בדיוני' },
-  fantasy: { en: 'Fantasy', he: 'פנטזיה' },
-  horror: { en: 'Horror', he: 'אימה' },
-  historical: { en: 'Historical', he: 'היסטורי' },
-  adventure: { en: 'Adventure', he: 'הרפתקאות' },
-  'young-adult': { en: 'YA', he: 'נוער' },
-  children: { en: "Children's", he: 'ילדים' },
-  biography: { en: 'Biography', he: 'ביוגרפיה' },
-  'self-help': { en: 'Self-Help', he: 'עזרה עצמית' },
-  business: { en: 'Business', he: 'עסקים' },
-  psychology: { en: 'Psychology', he: 'פסיכולוגיה' },
-  philosophy: { en: 'Philosophy', he: 'פילוסופיה' },
-  history: { en: 'History', he: 'היסטוריה' },
-  science: { en: 'Science', he: 'מדע' },
-  health: { en: 'Health', he: 'בריאות' },
-  cooking: { en: 'Cooking', he: 'בישול' },
-  art: { en: 'Art', he: 'אמנות' },
-  travel: { en: 'Travel', he: 'טיולים' },
-  religion: { en: 'Religion', he: 'דת' },
-  poetry: { en: 'Poetry', he: 'שירה' },
-  humor: { en: 'Humor', he: 'הומור' },
-  comics: { en: 'Comics', he: 'קומיקס' },
-};
+// Genre label lookup: DB sub-values first, fall back to top-level keys
+function getGenreLabel(g: string, isRTL: boolean): string {
+  const label = DB_VALUE_TO_LABEL[g] ?? GENRE_LABEL_MAP[g];
+  if (!label) return g;
+  return isRTL ? label.he : label.en;
+}
 
 // ── Book card ─────────────────────────────────────────────────────────────
 
@@ -138,14 +119,16 @@ const BookCard = memo(({ item, isRTL, onPress, distance }: CardProps) => {
         >
           <Ionicons
             name={isFavorite ? 'heart' : 'heart-outline'}
-            size={15}
-            color={isFavorite ? C.pink : 'rgba(255,255,255,0.9)'}
+            size={22}
+            color={isFavorite ? C.pink : 'rgba(255,255,255,0.95)'}
           />
         </TouchableOpacity>
       </View>
       <View style={s.cardBody}>
         <Text style={[s.cardTitle, isRTL && s.rAlign]} numberOfLines={2}>{item.title}</Text>
-        <Text style={[s.cardAuthor, isRTL && s.rAlign]} numberOfLines={1}>{item.author}</Text>
+        <Text style={[s.cardAuthor, isRTL && s.rAlign]} numberOfLines={1}>
+          {item.author || (isRTL ? 'מחבר לא ידוע' : 'Unknown')}
+        </Text>
         {(cond || genres.length > 0) && (
           <View style={[s.genreRow, isRTL && s.rowRev]}>
             {cond && COND_BG[cond] && (
@@ -158,7 +141,7 @@ const BookCard = memo(({ item, isRTL, onPress, distance }: CardProps) => {
             {genres.slice(0, cond ? 1 : 2).map(g => (
               <View key={g} style={s.genrePill}>
                 <Text style={s.genrePillTxt} numberOfLines={1}>
-                  {isRTL ? (GENRE_LABELS[g]?.he ?? g) : (GENRE_LABELS[g]?.en ?? g)}
+                  {getGenreLabel(g, isRTL)}
                 </Text>
               </View>
             ))}
@@ -664,8 +647,7 @@ const s = StyleSheet.create({
   // Heart / favorite button (overlay on image, opposite corner from condition badge)
   heartBtn: {
     position: 'absolute', top: 6, right: 6,
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: 'rgba(0,0,0,0.28)',
+    width: 32, height: 32,
     justifyContent: 'center', alignItems: 'center',
   },
   heartBtnRTL: { right: undefined, left: 6 },
@@ -676,7 +658,7 @@ const s = StyleSheet.create({
   cardFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
   cityRow:    { flexDirection: 'row', alignItems: 'center', gap: 3, flexShrink: 1, marginRight: 6 },
   cardCity:   { fontSize: 11, color: C.muted, flexShrink: 1 },
-  priceTxt:   { fontSize: 13, fontWeight: '600', flexShrink: 0 },
+  priceTxt:   { fontSize: 16, fontWeight: '600', flexShrink: 0 },
 
   // Genre pills — warm neutral (not blue)
   genreRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 6 },

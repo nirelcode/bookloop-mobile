@@ -26,6 +26,29 @@
 
 <!-- Add new entries at the TOP, below this line -->
 
+## [PENDING] 2026-03-08 — Add shipping_type + shipping_details to books table
+**Origin**: bookloop_mobile
+**Type**: Database Migration
+
+### What was done in the origin project:
+- Added `shipping_type TEXT NOT NULL DEFAULT 'pickup'` (check: 'pickup' | 'shipping') to `books` table
+- Added `shipping_details TEXT` (nullable) to `books` table
+- PublishScreen + EditBookScreen: 2-chip selector (איסוף עצמי / משלוח) + free-text details field
+- BookDetailScreen: shipping row in details box
+- CatalogScreen + FiltersModal: "משלוח" filter
+
+### What the other project needs to do:
+- [ ] Update `src/lib/database.types.ts` — add `shipping_type: string` and `shipping_details: string | null` to books `Row`, `Insert`, and `Update` types
+- [ ] Show shipping info on book detail page (webapp)
+- [ ] Add shipping filter to catalog/search (optional)
+
+### Migration SQL (already applied to Supabase):
+```sql
+ALTER TABLE books
+  ADD COLUMN shipping_type text NOT NULL DEFAULT 'pickup' CHECK (shipping_type IN ('pickup', 'shipping')),
+  ADD COLUMN shipping_details text;
+```
+
 ## [PENDING] 2026-02-24 — Add push_token to profiles table
 **Origin**: bookloop_mobile
 **Type**: Database Migration

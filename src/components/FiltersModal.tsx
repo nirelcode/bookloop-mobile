@@ -13,6 +13,7 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { BOOK_CONDITIONS, LISTING_TYPES, GENRES_META } from '../constants/books';
 import { useLanguageStore } from '../stores/languageStore';
 import { useLocationStore } from '../stores/locationStore';
@@ -50,7 +51,23 @@ const LISTING_CONFIG: Record<string, { icon: string; activeColor: string; active
 
 export default function FiltersModal({ visible, onClose, onApply, currentFilters }: FiltersModalProps) {
   const { isRTL }  = useLanguageStore();
-  const { coords } = useLocationStore();
+  const { coords, setCoords, setPermission } = useLocationStore();
+
+  const handleNearMeTap = async () => {
+    if (coords) {
+      setNearMe(true); setCity('');
+      return;
+    }
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      setPermission(status === 'granted' ? 'granted' : 'denied');
+      if (status === 'granted') {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setCoords({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        setNearMe(true); setCity('');
+      }
+    } catch {}
+  };
 
   const swipePan = useRef(PanResponder.create({
     onMoveShouldSetPanResponder: (_, g) => g.dy > 8 && Math.abs(g.dy) > Math.abs(g.dx),
@@ -58,7 +75,7 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
   })).current;
 
   const [listingType, setListingType] = useState(currentFilters.listingType || '');
-  const [condition, setCondition]     = useState(currentFilters.condition   || '');
+  const [conditions, setConditions]   = useState<string[]>(currentFilters.conditions || []);
   const [city, setCity]               = useState(currentFilters.city        || '');
   const [genres, setGenres]           = useState<string[]>(currentFilters.genres || []);
   const [minPrice, setMinPrice]       = useState(
@@ -68,6 +85,7 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
     currentFilters.maxPrice !== undefined ? String(currentFilters.maxPrice) : ''
   );
   const [nearMe, setNearMe]                 = useState<boolean>(!!currentFilters.nearMe);
+  const [shipping, setShipping]             = useState<boolean>(!!currentFilters.shipping);
   const [showCityPicker, setShowCityPicker]   = useState(false);
   const [showGenrePicker, setShowGenrePicker] = useState(false);
 
@@ -75,10 +93,11 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
   useEffect(() => {
     if (visible) {
       setListingType(currentFilters.listingType || '');
-      setCondition(currentFilters.condition   || '');
+      setConditions(currentFilters.conditions || []);
       setCity(currentFilters.city             || '');
       setGenres(currentFilters.genres         || []);
       setNearMe(!!currentFilters.nearMe);
+      setShipping(!!currentFilters.shipping);
       setMinPrice(currentFilters.minPrice !== undefined ? String(currentFilters.minPrice) : '');
       setMaxPrice(currentFilters.maxPrice !== undefined ? String(currentFilters.maxPrice) : '');
     }
@@ -100,10 +119,11 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
   const handleApply = () => {
     onApply({
       listingType,
-      condition,
+      conditions: conditions.length > 0 ? conditions : undefined,
       city,
       genres: genres.length > 0 ? genres : undefined,
       nearMe: nearMe || undefined,
+      shipping: shipping || undefined,
       minPrice: minPrice ? parseInt(minPrice, 10) : undefined,
       maxPrice: maxPrice ? parseInt(maxPrice, 10) : undefined,
     });
@@ -112,10 +132,11 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
 
   const handleReset = () => {
     setListingType('');
-    setCondition('');
+    setConditions([]);
     setCity('');
     setGenres([]);
     setNearMe(false);
+    setShipping(false);
     setMinPrice('');
     setMaxPrice('');
     onApply({});
@@ -125,9 +146,10 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
 
   const activeFiltersCount = [
     listingType,
-    condition,
+    ...conditions,
     city,
     nearMe ? 'nearMe' : '',
+    shipping ? 'shipping' : '',
     (minPrice || maxPrice) ? 'price' : '',
     ...genres,
   ].filter(Boolean).length;
@@ -227,8 +249,11 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
                 <Pill
                   key={c.value}
                   label={isRTL ? c.labelHe : c.label}
-                  active={condition === c.value}
-                  onPress={() => setCondition(condition === c.value ? '' : c.value)}
+                  active={conditions.includes(c.value)}
+                  onPress={() => setConditions(conditions.includes(c.value)
+                    ? conditions.filter(x => x !== c.value)
+                    : [...conditions, c.value]
+                  )}
                 />
               ))}
             </View>
@@ -254,6 +279,16 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
                 <Ionicons name="chevron-forward" size={16} color={C.muted} />
               </TouchableOpacity>
             )}
+
+            {/* ── Shipping ── */}
+            <SectionLabel text={isRTL ? 'משלוח' : 'Shipping'} />
+            <View style={s.pillRow}>
+              <Pill
+                label={isRTL ? 'משלוח זמין' : 'Shipping available'}
+                active={shipping}
+                onPress={() => setShipping(v => !v)}
+              />
+            </View>
 
             {/* ── City ── */}
             <SectionLabel text={isRTL ? 'עיר' : 'City'} />
@@ -285,16 +320,14 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
                   <Text style={s.cityPickerBtnTxt}>{isRTL ? 'בחר עיר...' : 'Select city...'}</Text>
                   <Ionicons name="chevron-forward" size={16} color={C.muted} />
                 </TouchableOpacity>
-                {!!coords && (
-                  <TouchableOpacity
-                    style={s.nearMeBtn}
-                    onPress={() => { setNearMe(true); setCity(''); }}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="navigate-outline" size={15} color={C.sub} />
-                    <Text style={s.nearMeBtnTxt}>{isRTL ? 'קרוב אליי' : 'Near Me'}</Text>
-                  </TouchableOpacity>
-                )}
+                <TouchableOpacity
+                  style={s.nearMeBtn}
+                  onPress={handleNearMeTap}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="navigate-outline" size={15} color={C.sub} />
+                  <Text style={s.nearMeBtnTxt}>{isRTL ? 'קרוב אליי' : 'Near Me'}</Text>
+                </TouchableOpacity>
               </View>
             )}
 

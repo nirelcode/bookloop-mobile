@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   View,
   Text,
@@ -36,6 +37,7 @@ interface BlockedUser {
 
 export default function BlockedUsersScreen() {
   const navigation = useNavigation<any>();
+  const insets     = useSafeAreaInsets();
   const { user }   = useAuthStore();
   const { isRTL }  = useLanguageStore();
   const { removeBlockedId, addBlockedId } = useDataStore();
@@ -103,8 +105,8 @@ export default function BlockedUsersScreen() {
         <View style={s.emptyIconWrap}>
           <Ionicons name="shield-checkmark-outline" size={44} color={C.muted} />
         </View>
-        <Text style={s.emptyTitle}>{isRTL ? 'אין משתמשים חסומים' : 'No blocked users'}</Text>
-        <Text style={s.emptySub}>
+        <Text style={[s.emptyTitle, isRTL && { textAlign: 'right' }]}>{isRTL ? 'אין משתמשים חסומים' : 'No blocked users'}</Text>
+        <Text style={[s.emptySub, isRTL && { textAlign: 'right' }]}>
           {isRTL
             ? 'משתמשים שחסמת יופיעו כאן'
             : 'Users you block will appear here'}
@@ -153,7 +155,7 @@ export default function BlockedUsersScreen() {
         data={blockedUsers}
         renderItem={renderItem}
         keyExtractor={item => item.blocked_id}
-        contentContainerStyle={s.list}
+        contentContainerStyle={[s.list, { paddingBottom: insets.bottom + 32 }]}
         ItemSeparatorComponent={() => <View style={s.separator} />}
       />
       <Toast {...toast} />
@@ -203,5 +205,5 @@ const s = StyleSheet.create({
   },
   unblockTxt: { fontSize: 13, fontWeight: '600', color: C.red },
 
-  separator: { height: 1, backgroundColor: C.border, marginLeft: 74 },
+  separator: { height: 1, backgroundColor: C.border, marginHorizontal: 74 },
 });

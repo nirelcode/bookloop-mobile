@@ -6,15 +6,16 @@ import {
   TouchableOpacity,
   Image,
   ScrollView,
-  Alert,
   RefreshControl,
-  Platform,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuthStore } from '../stores/authStore';
 import { useLanguageStore } from '../stores/languageStore';
+import { useDataStore } from '../stores/dataStore';
 import { supabase } from '../lib/supabase';
 import i18n from '../lib/i18n';
 import { StatSkeleton } from '../components/Skeleton';
@@ -44,29 +45,36 @@ export default function ProfileScreen() {
   const navigation = useNavigation<Nav>();
   const { user, profile, signOut } = useAuthStore();
   const { isRTL } = useLanguageStore();
+  const favoriteIds      = useDataStore(s => s.favoriteIds);
+  const wishlistFetchedAt = useDataStore(s => s.wishlistFetchedAt);
   const insets = useSafeAreaInsets();
 
-  const [listingCount, setListingCount]   = useState<number | null>(null);
-  const [wishlistCount, setWishlistCount] = useState<number | null>(null);
-  const [refreshing, setRefreshing]       = useState(false);
+  const [listingCount, setListingCount] = useState<number | null>(null);
+  const [refreshing, setRefreshing]     = useState(false);
+  const [logoutVisible, setLogoutVisible] = useState(false);
+
+  // Live from store — null (skeleton) only until first fetch resolves
+  const wishlistCount = (wishlistFetchedAt > 0 || listingCount !== null) ? favoriteIds.length : null;
 
   const chevron = isRTL ? 'chevron-back' : 'chevron-forward';
 
   const fetchCounts = useCallback(async () => {
     if (!user) return;
-    const [listings, favorites] = await Promise.all([
+    const [listings, favs] = await Promise.all([
       supabase
         .from('books')
         .select('id', { count: 'exact', head: true })
         .eq('user_id', user.id)
         .eq('status', 'active'),
-      supabase
-        .from('favorites')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id),
+      // Only fetch favorite IDs if wishlist hasn't been loaded yet
+      useDataStore.getState().wishlistFetchedAt === 0
+        ? supabase.from('favorites').select('book_id').eq('user_id', user.id)
+        : Promise.resolve(null),
     ]);
     setListingCount(listings.count ?? 0);
-    setWishlistCount(favorites.count ?? 0);
+    if (favs && 'data' in favs && favs.data) {
+      useDataStore.getState().setFavoriteIds((favs.data as any[]).map(r => r.book_id));
+    }
   }, [user]);
 
   useEffect(() => { fetchCounts(); }, [fetchCounts]);
@@ -83,20 +91,15 @@ export default function ProfileScreen() {
   };
 
   const handleSignOut = () => {
-    if (Platform.OS === 'web') {
-      doSignOut();
-      return;
-    }
-    Alert.alert(i18n.t('common.signOut'), i18n.t('profile.signOutConfirm'), [
-      { text: i18n.t('common.cancel'), style: 'cancel' },
-      { text: i18n.t('common.signOut'), style: 'destructive', onPress: doSignOut },
-    ]);
+    setLogoutVisible(true);
   };
 
   if (!user) return null;
 
   const initial = profile?.name?.charAt(0).toUpperCase() || 'U';
-  const memberSince = profile?.created_at ? new Date(profile.created_at).getFullYear() : null;
+  const memberSince = profile?.created_at
+    ? new Date(profile.created_at).toLocaleDateString(isRTL ? 'he-IL' : 'en-US', { month: 'short', year: '2-digit' })
+    : null;
 
   return (
     <ScrollView
@@ -106,7 +109,7 @@ export default function ProfileScreen() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.primary} />}
     >
       {/* ── Header ── */}
-      <View style={[s.header, { paddingTop: insets.top + 16 }]}>
+      <View style={[s.header, { paddingTop: insets.top + 8 }]}>
 
         {/* Edit button — top corner */}
         <TouchableOpacity
@@ -183,7 +186,7 @@ export default function ProfileScreen() {
           <>
             <View style={s.statDivider} />
             <View style={s.statItem}>
-              <Text style={s.statNum}>{memberSince}</Text>
+              <Text style={[s.statNum, { fontSize: 15 }]} numberOfLines={1} adjustsFontSizeToFit>{memberSince}</Text>
               <Text style={s.statLabel}>{isRTL ? 'חבר מאז' : 'Since'}</Text>
             </View>
           </>
@@ -248,6 +251,48 @@ export default function ProfileScreen() {
       <View style={s.footer}>
         <Text style={s.footerText}>{i18n.t('profile.version')}</Text>
       </View>
+
+      {/* ── Logout confirmation modal ── */}
+      <Modal
+        visible={logoutVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLogoutVisible(false)}
+      >
+        <Pressable style={s.modalOverlay} onPress={() => setLogoutVisible(false)}>
+          <Pressable style={s.logoutModal} onPress={() => {}}>
+            <View style={s.logoutIconWrap}>
+              <Ionicons name="log-out-outline" size={28} color={C.red} />
+            </View>
+            <Text style={s.logoutTitle}>
+              {isRTL ? 'יציאה מהחשבון' : 'Sign Out'}
+            </Text>
+            <Text style={s.logoutSubtitle}>
+              {isRTL ? 'האם אתה בטוח שברצונך לצאת?' : 'Are you sure you want to sign out?'}
+            </Text>
+            <View style={[s.logoutActions, isRTL && { flexDirection: 'row-reverse' }]}>
+              <TouchableOpacity
+                style={s.logoutCancelBtn}
+                onPress={() => setLogoutVisible(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={s.logoutCancelTxt}>
+                  {isRTL ? 'ביטול' : 'Cancel'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.logoutConfirmBtn}
+                onPress={() => { setLogoutVisible(false); doSignOut(); }}
+                activeOpacity={0.8}
+              >
+                <Text style={s.logoutConfirmTxt}>
+                  {isRTL ? 'יציאה' : 'Sign Out'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }
@@ -319,7 +364,7 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 16,
-    marginTop: 52,
+    marginTop: 36,
   },
 
   // Avatar
@@ -415,4 +460,54 @@ const s = StyleSheet.create({
 
   footer:     { padding: 28, alignItems: 'center' },
   footerText: { fontSize: 12, color: C.muted },
+
+  // ── Logout modal ──
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  logoutModal: {
+    width: '100%',
+    backgroundColor: C.white,
+    borderRadius: 20,
+    padding: 28,
+    alignItems: 'center',
+  },
+  logoutIconWrap: {
+    width: 60, height: 60, borderRadius: 30,
+    backgroundColor: C.redLight,
+    justifyContent: 'center', alignItems: 'center',
+    marginBottom: 16,
+  },
+  logoutTitle: {
+    fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 8,
+  },
+  logoutSubtitle: {
+    fontSize: 14, color: C.sub, textAlign: 'center', marginBottom: 24, lineHeight: 20,
+  },
+  logoutActions: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  logoutCancelBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+  },
+  logoutCancelTxt: { fontSize: 15, fontWeight: '600', color: C.sub },
+  logoutConfirmBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 12,
+    backgroundColor: C.red,
+    alignItems: 'center',
+  },
+  logoutConfirmTxt: { fontSize: 15, fontWeight: '600', color: C.white },
 });

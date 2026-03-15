@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   View,
   Text,
@@ -18,7 +19,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { useToast, Toast } from '../components/Toast';
 import { Ionicons } from '@expo/vector-icons';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { useLanguageStore } from '../stores/languageStore';
 import { useAuthStore } from '../stores/authStore';
@@ -40,10 +41,10 @@ const C = {
   muted: '#a8a29e',
   primary: '#2563eb',
   primaryLight: '#eff6ff',
-  emerald: '#10b981',
+  emerald: '#059669',
   red: '#ef4444',
   redLight: '#fee2e2',
-  amber: '#f59e0b',
+  amber: '#d97706',
 };
 
 interface RowProps {
@@ -86,9 +87,27 @@ function Row({ icon, iconColor, iconBg, label, value, onPress, destructive, last
 
 export default function SettingsScreen() {
   const navigation = useNavigation<any>();
+  const insets     = useSafeAreaInsets();
   const { language, setLanguage, isRTL } = useLanguageStore();
   const { user, profile } = useAuthStore();
   const { showToast, toast } = useToast();
+
+  // Delete account modal state
+  const [deleteVisible,  setDeleteVisible]  = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteLoading,  setDeleteLoading]  = useState(false);
+  const [deleteError,    setDeleteError]    = useState('');
+
+  // Change password modal state
+  const [pwVisible,    setPwVisible]    = useState(false);
+  const [pwCurrent,    setPwCurrent]    = useState('');
+  const [pwNew,        setPwNew]        = useState('');
+  const [pwConfirm,    setPwConfirm]    = useState('');
+  const [pwLoading,    setPwLoading]    = useState(false);
+  const [pwError,      setPwError]      = useState('');
+  const [showCurrent,  setShowCurrent]  = useState(false);
+  const [showNew,      setShowNew]      = useState(false);
+  const [showConfirm,  setShowConfirm]  = useState(false);
 
   // Contact modal state
   const [contactVisible, setContactVisible] = useState(false);
@@ -153,19 +172,75 @@ export default function SettingsScreen() {
     // no alert needed — tab bar and screens react immediately via Zustand
   };
 
-  const handleChangePassword = async () => {
+  const handleChangePassword = () => {
+    setPwCurrent(''); setPwNew(''); setPwConfirm(''); setPwError('');
+    setShowCurrent(false); setShowNew(false); setShowConfirm(false);
+    setPwVisible(true);
+  };
+
+  const confirmChangePassword = async () => {
     if (!user?.email) return;
+    if (!pwCurrent) { setPwError(isRTL ? 'הזן את הסיסמה הנוכחית' : 'Enter your current password'); return; }
+    if (pwNew.length < 6)  { setPwError(isRTL ? 'הסיסמה החדשה חייבת להכיל לפחות 6 תווים' : 'New password must be at least 6 characters'); return; }
+    if (pwNew !== pwConfirm) { setPwError(isRTL ? 'הסיסמאות אינן תואמות' : "Passwords don't match"); return; }
+
+    setPwLoading(true); setPwError('');
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(user.email);
-      if (error) throw error;
-      Alert.alert(
-        i18n.t('common.success'),
-        isRTL
-          ? `שלחנו קישור לאיפוס סיסמה לכתובת ${user.email}`
-          : `We sent a password reset link to ${user.email}`,
-      );
+      // Verify current password
+      const { error: authErr } = await supabase.auth.signInWithPassword({ email: user.email, password: pwCurrent });
+      if (authErr) { setPwError(isRTL ? 'הסיסמה הנוכחית שגויה' : 'Current password is incorrect'); setPwLoading(false); return; }
+
+      // Update to new password
+      const { error: updateErr } = await supabase.auth.updateUser({ password: pwNew });
+      if (updateErr) throw updateErr;
+
+      setPwVisible(false);
+      showToast(isRTL ? 'הסיסמה עודכנה בהצלחה' : 'Password updated successfully', 'success');
     } catch (e: any) {
-      Alert.alert(i18n.t('common.error'), e.message);
+      setPwError(e.message || (isRTL ? 'שגיאה' : 'Something went wrong'));
+    } finally {
+      setPwLoading(false);
+    }
+  };
+
+  const isOAuthUser = user?.app_metadata?.provider === 'google';
+
+  const handleDeleteAccount = () => {
+    setDeletePassword('');
+    setDeleteError('');
+    setDeleteVisible(true);
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (!user) return;
+    setDeleteLoading(true);
+    setDeleteError('');
+    try {
+      // For email users — verify password first
+      if (!isOAuthUser) {
+        const { error: authErr } = await supabase.auth.signInWithPassword({
+          email: user.email!,
+          password: deletePassword,
+        });
+        if (authErr) {
+          setDeleteError(isRTL ? 'סיסמה שגויה. נסו שוב.' : 'Wrong password. Please try again.');
+          setDeleteLoading(false);
+          return;
+        }
+      }
+
+      // Delete all data + auth user in one RPC (SECURITY DEFINER runs as postgres)
+      const { error: rpcErr } = await supabase.rpc('delete_my_account');
+      if (rpcErr) throw rpcErr;
+
+      // Clear local flags so re-registration starts fresh
+      await AsyncStorage.removeItem('bookloop_setup_done');
+      // Sign out locally
+      useAuthStore.getState().signOut();
+      supabase.auth.signOut();
+    } catch (e: any) {
+      setDeleteError(e?.message ?? (isRTL ? 'שגיאה, נסו שוב.' : 'Something went wrong.'));
+      setDeleteLoading(false);
     }
   };
 
@@ -211,14 +286,14 @@ export default function SettingsScreen() {
 
   return (
     <View style={{ flex: 1 }}>
-    <ScrollView style={s.container} contentContainerStyle={s.content}>
+    <ScrollView style={s.container} contentContainerStyle={[s.content, { paddingBottom: insets.bottom + 48 }]}>
 
       {/* ── Language ── */}
       <Text style={[s.sectionLabel, isRTL && s.rAlign]}>{i18n.t('settings.language')}</Text>
       <View style={s.card}>
         {(['en', 'he'] as const).map((lang, i) => {
           const active = language === lang;
-          const label = lang === 'en' ? '🇺🇸  English' : '🇮🇱  עברית';
+          const label = lang === 'en' ? 'English' : 'עברית';
           return (
             <TouchableOpacity
               key={lang}
@@ -260,19 +335,29 @@ export default function SettingsScreen() {
         <>
           <Text style={[s.sectionLabel, isRTL && s.rAlign]}>{i18n.t('settings.account')}</Text>
           <View style={s.card}>
-            <Row
-              icon="lock-closed-outline"
-              iconColor={C.amber}
-              iconBg="#fef3c7"
-              label={i18n.t('settings.changePassword')}
-              onPress={handleChangePassword}
-            />
+            {!isOAuthUser && (
+              <Row
+                icon="lock-closed-outline"
+                iconColor={C.amber}
+                iconBg="#fef3c7"
+                label={i18n.t('settings.changePassword')}
+                onPress={handleChangePassword}
+              />
+            )}
             <Row
               icon="person-remove-outline"
               iconColor={C.red}
               iconBg={C.redLight}
               label={isRTL ? 'משתמשים חסומים' : 'Blocked users'}
               onPress={() => navigation.navigate('BlockedUsers')}
+            />
+            <Row
+              icon="trash-outline"
+              iconColor={C.red}
+              iconBg={C.redLight}
+              label={isRTL ? 'מחיקת חשבון' : 'Delete Account'}
+              onPress={handleDeleteAccount}
+              destructive
               last
             />
           </View>
@@ -324,7 +409,7 @@ export default function SettingsScreen() {
           activeOpacity={0.75}
         >
           <View style={[s.socialIconWrap, { backgroundColor: '#fce4ec' }]}>
-            <MaterialCommunityIcons name="instagram" size={26} color="#E1306C" />
+            <Ionicons name="logo-instagram" size={26} color="#E1306C" />
           </View>
           <Text style={s.socialLabel}>Instagram</Text>
         </TouchableOpacity>
@@ -336,12 +421,145 @@ export default function SettingsScreen() {
           onPress={() => Linking.openURL('https://www.tiktok.com/@bookloop.co.il?_r=1&_t=ZS-94StOFijAKS')}
           activeOpacity={0.75}
         >
-          <View style={[s.socialIconWrap, { backgroundColor: '#f0f0f0' }]}>
-            <MaterialCommunityIcons name="music-note" size={26} color="#010101" />
+          <View style={[s.socialIconWrap, { backgroundColor: '#010101' }]}>
+            <Ionicons name="logo-tiktok" size={24} color="#ffffff" />
           </View>
           <Text style={s.socialLabel}>TikTok</Text>
         </TouchableOpacity>
       </View>
+
+      {/* ── Delete account modal ── */}
+      <Modal visible={deleteVisible} transparent animationType="fade" onRequestClose={() => setDeleteVisible(false)}>
+        <KeyboardAvoidingView style={s.modalKAV} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <Pressable style={s.modalOverlay} onPress={() => !deleteLoading && setDeleteVisible(false)}>
+            <Pressable style={s.modalCard} onPress={e => e.stopPropagation()}>
+
+              <View style={[s.modalHeader, isRTL && s.rowRTL]}>
+                <Text style={[s.modalTitle, { color: C.red }]}>
+                  {isRTL ? 'מחיקת חשבון' : 'Delete Account'}
+                </Text>
+                <TouchableOpacity onPress={() => setDeleteVisible(false)} disabled={deleteLoading} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close" size={22} color={C.muted} />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[s.modalSub, { marginBottom: 16, lineHeight: 20 }, isRTL && { textAlign: 'right' }]}>
+                {isRTL
+                  ? 'פעולה זו תמחק לצמיתות את כל הנתונים שלך — פרופיל, ספרים, ורשימות מועדפות. לא ניתן לשחזר.'
+                  : 'This will permanently delete your profile, listings, and all your data. This cannot be undone.'}
+              </Text>
+
+              <Text style={[s.deleteLabel, isRTL && { textAlign: 'right' }]}>
+                {isOAuthUser
+                  ? (isRTL ? 'הקלידו "password" לאישור' : 'Type "password" to confirm')
+                  : (isRTL ? 'הזינו סיסמה לאישור' : 'Enter your password to confirm')}
+              </Text>
+              <TextInput
+                style={[s.modalInput, { minHeight: 48 }, isRTL && { textAlign: 'right' }]}
+                placeholder={isOAuthUser ? 'password' : (isRTL ? 'סיסמה' : 'Password')}
+                placeholderTextColor={C.muted}
+                secureTextEntry={!isOAuthUser}
+                autoCapitalize="none"
+                value={deletePassword}
+                onChangeText={t => { setDeletePassword(t); setDeleteError(''); }}
+                editable={!deleteLoading}
+              />
+
+              {!!deleteError && (
+                <Text style={s.deleteErrTxt}>{deleteError}</Text>
+              )}
+
+              <TouchableOpacity
+                style={[s.deleteConfirmBtn, (deleteLoading || (isOAuthUser ? deletePassword.trim().toLowerCase() !== 'password' : !deletePassword)) && { opacity: 0.5 }]}
+                onPress={confirmDeleteAccount}
+                disabled={deleteLoading || (isOAuthUser ? deletePassword.trim().toLowerCase() !== 'password' : !deletePassword)}
+                activeOpacity={0.85}
+              >
+                {deleteLoading
+                  ? <ActivityIndicator color={C.white} size="small" />
+                  : <Text style={s.modalSendTxt}>{isRTL ? 'מחק את חשבוני' : 'Delete My Account'}</Text>
+                }
+              </TouchableOpacity>
+
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ── Change password modal ── */}
+      <Modal visible={pwVisible} transparent animationType="fade" onRequestClose={() => !pwLoading && setPwVisible(false)}>
+        <KeyboardAvoidingView style={s.modalKAV} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <Pressable style={s.modalOverlay} onPress={() => !pwLoading && setPwVisible(false)}>
+            <Pressable style={s.modalCard} onPress={e => e.stopPropagation()}>
+
+              <View style={[s.modalHeader, isRTL && s.rowRTL]}>
+                <Text style={s.modalTitle}>{isRTL ? 'שינוי סיסמה' : 'Change Password'}</Text>
+                <TouchableOpacity onPress={() => setPwVisible(false)} disabled={pwLoading} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close" size={22} color={C.muted} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={[s.pwInputWrap, { marginBottom: 10 }]}>
+                <TextInput
+                  style={[s.modalInput, { minHeight: 48, marginBottom: 0 }, isRTL ? { textAlign: 'right', paddingLeft: 48 } : { paddingRight: 48 }]}
+                  placeholder={isRTL ? 'סיסמה נוכחית' : 'Current password'}
+                  placeholderTextColor={C.muted}
+                  secureTextEntry={!showCurrent}
+                  value={pwCurrent}
+                  onChangeText={t => { setPwCurrent(t); setPwError(''); }}
+                  editable={!pwLoading}
+                />
+                <TouchableOpacity style={[s.eyeBtn, isRTL && s.eyeBtnRTL]} onPress={() => setShowCurrent(v => !v)}>
+                  <Ionicons name={showCurrent ? 'eye' : 'eye-off-outline'} size={18} color={C.muted} />
+                </TouchableOpacity>
+              </View>
+              <View style={[s.pwInputWrap, { marginBottom: 10 }]}>
+                <TextInput
+                  style={[s.modalInput, { minHeight: 48, marginBottom: 0 }, isRTL ? { textAlign: 'right', paddingLeft: 48 } : { paddingRight: 48 }]}
+                  placeholder={isRTL ? 'סיסמה חדשה' : 'New password'}
+                  placeholderTextColor={C.muted}
+                  secureTextEntry={!showNew}
+                  value={pwNew}
+                  onChangeText={t => { setPwNew(t); setPwError(''); }}
+                  editable={!pwLoading}
+                />
+                <TouchableOpacity style={[s.eyeBtn, isRTL && s.eyeBtnRTL]} onPress={() => setShowNew(v => !v)}>
+                  <Ionicons name={showNew ? 'eye' : 'eye-off-outline'} size={18} color={C.muted} />
+                </TouchableOpacity>
+              </View>
+              <View style={s.pwInputWrap}>
+                <TextInput
+                  style={[s.modalInput, { minHeight: 48, marginBottom: 0 }, isRTL ? { textAlign: 'right', paddingLeft: 48 } : { paddingRight: 48 }]}
+                  placeholder={isRTL ? 'אימות סיסמה חדשה' : 'Confirm new password'}
+                  placeholderTextColor={C.muted}
+                  secureTextEntry={!showConfirm}
+                  value={pwConfirm}
+                  onChangeText={t => { setPwConfirm(t); setPwError(''); }}
+                  editable={!pwLoading}
+                />
+                <TouchableOpacity style={[s.eyeBtn, isRTL && s.eyeBtnRTL]} onPress={() => setShowConfirm(v => !v)}>
+                  <Ionicons name={showConfirm ? 'eye' : 'eye-off-outline'} size={18} color={C.muted} />
+                </TouchableOpacity>
+              </View>
+
+              {!!pwError && <Text style={s.deleteErrTxt}>{pwError}</Text>}
+
+              <TouchableOpacity
+                style={[s.modalSendBtn, (!pwCurrent || !pwNew || !pwConfirm || pwLoading) && { opacity: 0.5 }]}
+                onPress={confirmChangePassword}
+                disabled={!pwCurrent || !pwNew || !pwConfirm || pwLoading}
+                activeOpacity={0.85}
+              >
+                {pwLoading
+                  ? <ActivityIndicator color={C.white} size="small" />
+                  : <Text style={s.modalSendTxt}>{isRTL ? 'עדכן סיסמה' : 'Update Password'}</Text>
+                }
+              </TouchableOpacity>
+
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* ── Contact modal ── */}
       <Modal visible={contactVisible} transparent animationType="fade" onRequestClose={() => setContactVisible(false)}>
@@ -592,6 +810,21 @@ const s = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
+
+  deleteLabel:      { fontSize: 13, color: C.sub, marginBottom: 8 },
+  deleteErrTxt:     { fontSize: 13, color: C.red, marginBottom: 10 },
+  deleteConfirmBtn: { backgroundColor: C.red, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+
+  pwInputWrap: { position: 'relative' },
+  eyeBtn: {
+    position: 'absolute',
+    right: 14,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  eyeBtnRTL: { right: undefined, left: 14 },
 
   footer: { marginTop: 24, alignItems: 'center' },
   footerLogo: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 4 },

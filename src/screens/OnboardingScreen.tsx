@@ -96,7 +96,7 @@ export default function OnboardingScreen({ onDone }: Props) {
     if (isLast) { onDone(); return; }
     const next = isRTL ? page - 1 : page + 1;
     listRef.current?.scrollToOffset({ offset: next * W, animated: true });
-    setPage(next);
+    // Don't setPage here — onScroll is the single source of truth to avoid double re-render lag
   };
 
   const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -183,16 +183,17 @@ export default function OnboardingScreen({ onDone }: Props) {
           onPress={goNext}
           activeOpacity={0.85}
         >
+          {isRTL && (
+            <Ionicons name="chevron-back" size={18} color={C.white} />
+          )}
           <Text style={s.btnTxt}>
             {isLast
               ? (isRTL ? 'בואו נתחיל' : 'Get Started')
               : (isRTL ? 'הבא' : 'Next')}
           </Text>
-          <Ionicons
-            name={isRTL ? 'chevron-back' : 'chevron-forward'}
-            size={18}
-            color={C.white}
-          />
+          {!isRTL && (
+            <Ionicons name="chevron-forward" size={18} color={C.white} />
+          )}
         </TouchableOpacity>
       </View>
 

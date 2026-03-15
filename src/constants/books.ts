@@ -128,6 +128,17 @@ export const GENRE_DB_GROUPS: Record<string, string[]> = {
   'comics':     ['comics', 'comics_kids', 'graphic_novel_comics'],
 };
 
+// Reverse lookup: maps any DB sub-genre value → its parent's {en, he} label.
+// Use this when rendering genres from book.genres, which may contain sub-values
+// like 'historical_fiction', 'educational_kids', 'business_management', etc.
+export const DB_VALUE_TO_LABEL: Record<string, { en: string; he: string }> =
+  Object.fromEntries(
+    Object.entries(GENRE_DB_GROUPS).flatMap(([parentKey, dbValues]) => {
+      const label = GENRE_LABEL_MAP[parentKey];
+      return label ? dbValues.map(v => [v, label]) : [];
+    })
+  );
+
 // Approximate city center coordinates for distance-sort fallback
 export const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   'תל אביב':             { lat: 32.0853, lng: 34.7818 },

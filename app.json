@@ -18,11 +18,11 @@
     "android": {
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/logo.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#3b82f6"
       },
       "package": "com.bookloop.mobile",
-      "versionCode": 1,
+      "versionCode": 5,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
@@ -42,10 +42,11 @@
     },
     "scheme": "bookloop",
     "plugins": [
+      "./plugins/withAndroidLocalProperties",
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
+          "icon": "./assets/notification-icon.png",
           "color": "#2563eb",
           "sounds": []
         }
@@ -65,7 +66,7 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "BookLoop uses your location to show nearby books."
+          "locationWhenInUsePermission": "BookLoop uses your location to show nearby books."
         }
       ]
     ],

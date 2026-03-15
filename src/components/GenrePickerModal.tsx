@@ -29,7 +29,11 @@ interface Props {
 
 export function GenrePickerModal({ visible, selected, isRTL, onChange, onClose }: Props) {
   const [search, setSearch] = useState('');
+  const [local, setLocal] = useState<string[]>(selected);
   const insets = useSafeAreaInsets();
+
+  // Sync local state when modal opens
+  React.useEffect(() => { if (visible) setLocal(selected); }, [visible]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -40,10 +44,9 @@ export function GenrePickerModal({ visible, selected, isRTL, onChange, onClose }
   }, [search]);
 
   const toggle = (key: string) => {
-    onChange(selected.includes(key)
-      ? selected.filter(g => g !== key)
-      : [...selected, key]
-    );
+    const next = local.includes(key) ? local.filter(g => g !== key) : [...local, key];
+    setLocal(next);
+    onChange(next);
   };
 
   const handleClose = () => { setSearch(''); onClose(); };
@@ -84,9 +87,9 @@ export function GenrePickerModal({ visible, selected, isRTL, onChange, onClose }
           </View>
 
           {/* Count hint */}
-          {selected.length > 0 && (
+          {local.length > 0 && (
             <Text style={s.countHint}>
-              {isRTL ? `${selected.length} נבחרו` : `${selected.length} selected`}
+              {isRTL ? `${local.length} נבחרו` : `${local.length} selected`}
             </Text>
           )}
 
@@ -97,7 +100,7 @@ export function GenrePickerModal({ visible, selected, isRTL, onChange, onClose }
             keyboardShouldPersistTaps="handled"
             style={s.list}
             renderItem={({ item: g }) => {
-              const on = selected.includes(g.key);
+              const on = local.includes(g.key);
               return (
                 <TouchableOpacity
                   style={[s.row, on && { backgroundColor: g.bg }]}
@@ -121,6 +124,17 @@ export function GenrePickerModal({ visible, selected, isRTL, onChange, onClose }
               <Text style={s.empty}>{isRTL ? 'לא נמצאו ז׳אנרים' : 'No genres found'}</Text>
             }
           />
+
+          {/* Done button */}
+          {local.length > 0 && (
+            <View style={s.doneRow}>
+              <TouchableOpacity style={s.doneBtn} onPress={handleClose} activeOpacity={0.85}>
+                <Text style={s.doneTxt}>
+                  {isRTL ? `סיום (${local.length})` : `Done (${local.length})`}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </Pressable>
         </KeyboardAvoidingView>
       </Pressable>
@@ -185,5 +199,18 @@ const s = StyleSheet.create({
   empty: {
     padding: 32, textAlign: 'center',
     fontSize: 14, color: C.muted,
+  },
+  doneRow: {
+    paddingHorizontal: 20, paddingTop: 12,
+    borderTopWidth: 1, borderTopColor: C.border,
+  },
+  doneBtn: {
+    backgroundColor: C.primary,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  doneTxt: {
+    color: '#ffffff', fontSize: 15, fontWeight: '600',
   },
 });

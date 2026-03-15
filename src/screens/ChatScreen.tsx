@@ -6,7 +6,7 @@ import {
   TextInput,
   TouchableOpacity,
   FlatList,
-  KeyboardAvoidingView,
+  Keyboard,
   Platform,
   ActivityIndicator,
   Alert,
@@ -30,6 +30,7 @@ import { useDataStore } from '../stores/dataStore';
 import { ChatSkeletons } from '../components/Skeleton';
 import { useToast, Toast } from '../components/Toast';
 import { ReportModal } from '../components/ReportModal';
+import SellerBooksPickerModal, { PickerBook } from '../components/SellerBooksPickerModal';
 import i18n from '../lib/i18n';
 
 interface Message {
@@ -54,6 +55,7 @@ interface BookContext {
   title: string;
   author: string;
   image?: string;
+  images?: string[];
   listing_type: string;
   price?: number;
 }
@@ -93,6 +95,7 @@ export default function ChatScreen() {
   const navigation = useNavigation<any>();
   const insets     = useSafeAreaInsets();
   const { isRTL }  = useLanguageStore();
+  const [kbHeight, setKbHeight] = useState(0);
 
   const { chatId: routeChatId, recipientId, recipientName, recipientAvatar, bookContext } = route.params as {
     chatId?: string;
@@ -113,18 +116,24 @@ export default function ChatScreen() {
       ? `היי, אני מעוניין ב"${bookContext.title}" — האם הוא עדיין זמין?`
       : `Hi, I'm interested in "${bookContext.title}" — is it still available?`;
   });
-  const [bookPreview, setBookPreview]       = useState<BookContext | null>(bookContext ?? null);
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [bookPreviews, setBookPreviews]     = useState<BookContext[]>(bookContext ? [bookContext] : []);
+  const [bookPickerVisible, setBookPickerVisible] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(() => {
+    if (routeChatId) return routeChatId;
+    return useChatStore.getState().getChatIdForRecipient(recipientId) ?? null;
+  });
   const [loadingMore, setLoadingMore]       = useState(false);
   const [refreshing, setRefreshing]         = useState(false);
   const [hasMore, setHasMore]               = useState(true);
   const [menuVisible,   setMenuVisible]   = useState(false);
   const [reportVisible, setReportVisible] = useState(false);
-  const [loading, setLoading]               = useState(
-    () => routeChatId ? !useChatStore.getState().hasCache(routeChatId) : true
-  );
+  const [loading, setLoading] = useState(() => {
+    const cid = routeChatId ?? useChatStore.getState().getChatIdForRecipient(recipientId);
+    return cid ? !useChatStore.getState().hasCache(cid) : true;
+  });
 
   const { showToast, toast } = useToast();
+  const [reviewPromptVisible, setReviewPromptVisible] = useState(false);
 
   const flatListRef    = useRef<FlatList>(null);
   const channelRef     = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -133,6 +142,15 @@ export default function ChatScreen() {
   const hasScrolledInitially  = useRef(false);
 
   const messages = conversationId ? chatStore.getMessages(conversationId) : [];
+
+  // Keyboard height tracking (needed for edge-to-edge Android)
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const show = Keyboard.addListener(showEvent, e => setKbHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener(hideEvent, () => setKbHeight(0));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   // Mark read on mount and focus
   useEffect(() => {
@@ -245,7 +263,7 @@ export default function ChatScreen() {
               <View style={[hs.avatar, hs.avatarFallback]}>
                 <Text style={hs.avatarInitial}>{recipientName.charAt(0).toUpperCase()}</Text>
                 {recipientAvatar && (
-                  <Image source={{ uri: recipientAvatar }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
+                  <Image source={{ uri: recipientAvatar }} style={[StyleSheet.absoluteFillObject, { borderRadius: 17 }]} contentFit="cover" />
                 )}
               </View>
               <View style={{ alignItems: 'flex-end' }}>
@@ -268,7 +286,7 @@ export default function ChatScreen() {
             <View style={[hs.avatar, hs.avatarFallback]}>
               <Text style={hs.avatarInitial}>{recipientName.charAt(0).toUpperCase()}</Text>
               {recipientAvatar && (
-                <Image source={{ uri: recipientAvatar }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
+                <Image source={{ uri: recipientAvatar }} style={[StyleSheet.absoluteFillObject, { borderRadius: 17 }]} contentFit="cover" />
               )}
             </View>
             <View>
@@ -302,16 +320,25 @@ export default function ChatScreen() {
       if (routeChatId) {
         chatId = routeChatId;
       } else {
-        const { data: existingChat } = await supabase
-          .from('chats').select('id')
-          .or(`and(buyer_id.eq.${user?.id},seller_id.eq.${recipientId}),and(buyer_id.eq.${recipientId},seller_id.eq.${user?.id})`)
-          .maybeSingle();
-        chatId = existingChat?.id ?? await (async () => {
-          const { data: newChat, error } = await supabase
-            .from('chats').insert({ buyer_id: user?.id, seller_id: recipientId }).select().single();
-          if (error) throw error;
-          return newChat.id;
-        })();
+        // Check in-memory cache first to skip the DB lookup
+        const cached = useChatStore.getState().getChatIdForRecipient(recipientId);
+        if (cached) {
+          chatId = cached;
+        } else {
+          const { data: existingChat } = await supabase
+            .from('chats').select('id')
+            .or(`and(buyer_id.eq.${user?.id},seller_id.eq.${recipientId}),and(buyer_id.eq.${recipientId},seller_id.eq.${user?.id})`)
+            .maybeSingle();
+          if (existingChat?.id) {
+            chatId = existingChat.id;
+          } else {
+            const { data: newChat, error } = await supabase
+              .from('chats').insert({ buyer_id: user?.id, seller_id: recipientId }).select().single();
+            if (error) throw error;
+            chatId = newChat.id;
+          }
+          useChatStore.getState().setChatIdForRecipient(recipientId, chatId);
+        }
       }
       setConversationId(chatId);
       subscribeToMessages(chatId);
@@ -319,8 +346,8 @@ export default function ChatScreen() {
       if (store.hasCache(chatId) && !store.isChatStale(chatId)) {
         setLoading(false);
         // Fetch any messages that arrived since our last cached message
-        const cached = store.getMessages(chatId);
-        const latest = cached[cached.length - 1];
+        const cachedMsgs = store.getMessages(chatId);
+        const latest = cachedMsgs[cachedMsgs.length - 1];
         if (latest) {
           supabase
             .from('messages')
@@ -340,6 +367,7 @@ export default function ChatScreen() {
       fetchMessages(chatId).finally(() => setLoading(false));
     } catch (error) {
       console.error('Error initializing conversation:', error);
+      setLoading(false); // always clear skeleton even on error
     }
   };
 
@@ -400,6 +428,63 @@ export default function ChatScreen() {
 
   // ── Realtime ──────────────────────────────────────────────────────────────
 
+  // ── Review pre-prompt ──────────────────────────────────────────────────────
+  const REVIEW_KEY = 'bookloop_review_v2';
+  const MAX_ASKS   = 3;
+  const COOLDOWN   = 45 * 24 * 60 * 60 * 1000; // 45 days
+  const MIN_AGE    = 7  * 24 * 60 * 60 * 1000; // account must be ≥ 7 days old
+
+  const maybeShowReviewPrompt = async () => {
+    try {
+      // Guard: account age
+      const createdAt = profile?.created_at ? new Date(profile.created_at).getTime() : Date.now();
+      if (Date.now() - createdAt < MIN_AGE) return;
+
+      const raw = await AsyncStorage.getItem(REVIEW_KEY);
+      const data = raw ? JSON.parse(raw) : { status: null, askCount: 0, askedAt: 0 };
+
+      // Permanent dismiss
+      if (data.status === 'dismissed') return;
+      // Max asks reached
+      if (data.askCount >= MAX_ASKS) return;
+      // Cooldown between asks
+      if (data.askedAt && Date.now() - data.askedAt < COOLDOWN) return;
+
+      setReviewPromptVisible(true);
+    } catch {}
+  };
+
+  const handleReviewYes = async () => {
+    setReviewPromptVisible(false);
+    try {
+      const raw = await AsyncStorage.getItem(REVIEW_KEY);
+      const data = raw ? JSON.parse(raw) : { askCount: 0 };
+      await AsyncStorage.setItem(REVIEW_KEY, JSON.stringify({
+        ...data, status: 'asked', askedAt: Date.now(), askCount: (data.askCount || 0) + 1,
+      }));
+      const ok = await StoreReview.isAvailableAsync();
+      if (ok) StoreReview.requestReview();
+    } catch {}
+  };
+
+  const handleReviewNotNow = async () => {
+    setReviewPromptVisible(false);
+    try {
+      const raw = await AsyncStorage.getItem(REVIEW_KEY);
+      const data = raw ? JSON.parse(raw) : { askCount: 0 };
+      await AsyncStorage.setItem(REVIEW_KEY, JSON.stringify({
+        ...data, askedAt: Date.now(), askCount: (data.askCount || 0) + 1,
+      }));
+    } catch {}
+  };
+
+  const handleReviewDismiss = async () => {
+    setReviewPromptVisible(false);
+    try {
+      await AsyncStorage.setItem(REVIEW_KEY, JSON.stringify({ status: 'dismissed' }));
+    } catch {}
+  };
+
   const subscribeToMessages = (chatId: string) => {
     if (channelRef.current) supabase.removeChannel(channelRef.current);
     const channel = supabase.channel(`messages:${chatId}`)
@@ -428,33 +513,46 @@ export default function ChatScreen() {
   // ── Send ──────────────────────────────────────────────────────────────────
 
   const sendMessage = async () => {
-    if (!newMessage.trim() || !conversationId) return;
     const text = newMessage.trim();
-    const snapshot = bookPreview;
+    const snapPreviews = bookPreviews;
+    if (!text && snapPreviews.length === 0) return;
+    if (!conversationId) return;
+
     setNewMessage('');
-    setBookPreview(null);
+    setBookPreviews([]);
+
     try {
-      const { error } = await supabase.from('messages').insert({
-        chat_id: conversationId,
-        sender_id: user?.id,
-        content: text,
-        ...(snapshot ? { book_id: snapshot.id, message_type: 'book_card' } : { message_type: 'text' }),
-      });
-      if (error) throw error;
+      if (snapPreviews.length > 0) {
+        // Send one book_card message per queued book
+        await Promise.all(
+          snapPreviews.map(book =>
+            supabase.from('messages').insert({
+              chat_id:      conversationId,
+              sender_id:    user?.id,
+              content:      text,
+              book_id:      book.id,
+              message_type: 'book_card',
+            })
+          )
+        );
+      } else {
+        const { error } = await supabase.from('messages').insert({
+          chat_id:      conversationId,
+          sender_id:    user?.id,
+          content:      text,
+          message_type: 'text',
+        });
+        if (error) throw error;
+      }
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       markChatRead(conversationId).then(triggerUnreadRefresh);
-      // Ask for a review once, after the user's first ever successful send
-      AsyncStorage.getItem('bookloop_review_asked').then(asked => {
-        if (!asked) {
-          AsyncStorage.setItem('bookloop_review_asked', 'true');
-          StoreReview.isAvailableAsync().then(ok => { if (ok) StoreReview.requestReview(); });
-        }
-      });
-      sendPushNotification(recipientId, text).catch(() => {});
+      // Smart review pre-prompt
+      maybeShowReviewPrompt();
+      sendPushNotification(recipientId, text || (isRTL ? 'שיתף ספר' : 'Shared a book')).catch(() => {});
     } catch (error) {
       console.error('Error sending message:', error);
       setNewMessage(text);
-      setBookPreview(snapshot);
+      setBookPreviews(snapPreviews);
       Alert.alert(i18n.t('common.error'), i18n.t('chat.sendFailed'));
     }
   };
@@ -493,10 +591,10 @@ export default function ChatScreen() {
     const TAIL = 4, FULL = 18;
     const isBottom = !groupedWithBelow;
 
-    // In LTR: my messages on right (tail bottom-right), theirs on left (tail bottom-left)
-    // In RTL: my messages on left (tail bottom-left), theirs on right (tail bottom-right)
-    const myTailLeft  = isRTL;   // my tail is on the left in RTL
-    const myTailRight = !isRTL;  // my tail is on the right in LTR
+    // My messages always appear on the right, theirs on the left — regardless of RTL.
+    // Text inside the bubble aligns per language, but bubble position stays consistent.
+    const myTailLeft  = false;
+    const myTailRight = true;
     const bubbleRadius = {
       borderTopLeftRadius:     FULL,
       borderTopRightRadius:    FULL,
@@ -527,7 +625,6 @@ export default function ChatScreen() {
           <View style={[
             s.cardBubble,
             isMe ? s.myBubble : s.theirBubble,
-            isRTL && (isMe ? { alignSelf: 'flex-start' } : { alignSelf: 'flex-end' }),
             bubbleRadius,
             { marginBottom },
           ]}>
@@ -550,15 +647,24 @@ export default function ChatScreen() {
                 </View>
               </View>
             </TouchableOpacity>
-            {/* Divider */}
-            <View style={[s.cardDivider, isMe && { backgroundColor: 'rgba(255,255,255,0.18)' }]} />
-            {/* Message text */}
-            <View style={s.cardText}>
-              <Text style={[s.bubbleText, isMe && s.myText]}>{item.content}</Text>
-              <Text style={[s.bubbleTime, isMe && s.myTime, isRTL && isMe && { alignSelf: 'flex-start' }]}>
-                {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-            </View>
+            {/* Divider + text — only shown when there's a caption */}
+            {item.content ? (
+              <>
+                <View style={[s.cardDivider, isMe && { backgroundColor: 'rgba(255,255,255,0.18)' }]} />
+                <View style={s.cardText}>
+                  <Text style={[s.bubbleText, isMe && s.myText]}>{item.content}</Text>
+                  <Text style={[s.bubbleTime, isMe && s.myTime]}>
+                    {new Date(item.created_at).toLocaleTimeString(isRTL ? 'he-IL' : 'en-US', { hour: '2-digit', minute: '2-digit' })}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <View style={s.cardTimeOnly}>
+                <Text style={[s.bubbleTime, isMe && s.myTime]}>
+                  {new Date(item.created_at).toLocaleTimeString(isRTL ? 'he-IL' : 'en-US', { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+              </View>
+            )}
           </View>
         </View>
       );
@@ -576,13 +682,12 @@ export default function ChatScreen() {
         <View style={[
           s.bubble,
           isMe ? s.myBubble : s.theirBubble,
-          isRTL && (isMe ? { alignSelf: 'flex-start' } : { alignSelf: 'flex-end' }),
           bubbleRadius,
           { marginBottom },
         ]}>
           <Text style={[s.bubbleText, isMe && s.myText]}>{item.content}</Text>
-          <Text style={[s.bubbleTime, isMe && s.myTime, isRTL && isMe && { alignSelf: 'flex-start' }]}>
-            {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          <Text style={[s.bubbleTime, isMe && s.myTime]}>
+            {new Date(item.created_at).toLocaleTimeString(isRTL ? 'he-IL' : 'en-US', { hour: '2-digit', minute: '2-digit' })}
           </Text>
         </View>
       </View>
@@ -593,34 +698,25 @@ export default function ChatScreen() {
 
   if (loading && messages.length === 0) {
     return (
-      <KeyboardAvoidingView
-        style={s.container}
-        behavior="padding"
-        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 56 : 0}
-      >
+      <View style={s.container}>
         <ChatSkeletons />
-        <View style={s.bottomArea}>
+        <View style={[s.bottomArea, { marginBottom: kbHeight > 0 ? kbHeight - insets.bottom : 0 }]}>
           <View style={[s.inputRow, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-            <TextInput
-              style={[s.input, { opacity: 0.4 }]}
-              editable={false}
-              placeholder={i18n.t('messages.typePlaceholder') || 'Type a message...'}
-            />
+            <View style={[s.inputPill, { opacity: 0.4 }]}>
+              <TextInput style={s.input} editable={false} placeholder={i18n.t('messages.typePlaceholder') || 'Type a message...'} />
+              <View style={s.pillIcon} />
+            </View>
             <View style={[s.sendBtn, s.sendBtnDisabled]} />
           </View>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     );
   }
 
   // ── Main render ───────────────────────────────────────────────────────────
 
   return (
-    <KeyboardAvoidingView
-      style={s.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 56 : 0}
-    >
+    <View style={s.container}>
       <FlatList
         ref={flatListRef}
         data={messages}
@@ -652,47 +748,73 @@ export default function ChatScreen() {
         }
       />
 
-      <View style={s.bottomArea}>
-        {bookPreview && (
-          <View style={s.bookPreview}>
-            <Image
-              source={{ uri: bookPreview.image ?? `https://picsum.photos/seed/${bookPreview.id}/300/400` }}
-              style={s.bookPreviewImg}
-              contentFit="cover"
-            />
-            <View style={s.bookPreviewInfo}>
-              <Text style={s.bookPreviewTitle} numberOfLines={1}>{bookPreview.title}</Text>
-              <Text style={s.bookPreviewAuthor} numberOfLines={1}>{bookPreview.author}</Text>
-              <View style={[s.bookPreviewBadge, { backgroundColor: (TYPE_COLORS[bookPreview.listing_type] ?? TYPE_COLORS.sale).bg }]}>
-                <Text style={[s.bookPreviewBadgeTxt, { color: (TYPE_COLORS[bookPreview.listing_type] ?? TYPE_COLORS.sale).text }]}>
-                  {bookPreview.listing_type === 'sale' && bookPreview.price
-                    ? `₪${bookPreview.price}`
-                    : bookPreview.listing_type === 'free'
-                      ? (isRTL ? 'חינם' : 'Free')
-                      : (isRTL ? 'להחלפה' : 'Trade')}
-                </Text>
-              </View>
-            </View>
-            <TouchableOpacity style={s.bookPreviewClose} onPress={() => setBookPreview(null)} activeOpacity={0.7}>
-              <Ionicons name="close" size={15} color="#78716c" />
-            </TouchableOpacity>
+      <View style={[s.bottomArea, { marginBottom: kbHeight > 0 ? kbHeight - insets.bottom : 0 }]}>
+        {/* Book preview strip — shows all queued books */}
+        {bookPreviews.length > 0 && (
+          <View style={s.previewStrip}>
+            {bookPreviews.map(book => {
+              const tc = TYPE_COLORS[book.listing_type] ?? TYPE_COLORS.sale;
+              const priceLabel = book.listing_type === 'sale' && book.price
+                ? `₪${book.price}`
+                : book.listing_type === 'free'
+                  ? (isRTL ? 'חינם' : 'Free')
+                  : (isRTL ? 'להחלפה' : 'Trade');
+              return (
+                <View key={book.id} style={s.bookPreview}>
+                  <Image
+                    source={{ uri: book.image ?? book.images?.[0] ?? `https://picsum.photos/seed/${book.id}/300/400` }}
+                    style={s.bookPreviewImg}
+                    contentFit="cover"
+                  />
+                  <View style={s.bookPreviewInfo}>
+                    <Text style={s.bookPreviewTitle} numberOfLines={1}>{book.title}</Text>
+                    <Text style={s.bookPreviewAuthor} numberOfLines={1}>{book.author}</Text>
+                    <View style={[s.bookPreviewBadge, { backgroundColor: tc.bg }]}>
+                      <Text style={[s.bookPreviewBadgeTxt, { color: tc.text }]}>{priceLabel}</Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity
+                    style={s.bookPreviewClose}
+                    onPress={() => setBookPreviews(prev => prev.filter(b => b.id !== book.id))}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="close" size={15} color="#78716c" />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
           </View>
         )}
-        <View style={[s.inputRow, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-          <TextInput
-            style={s.input}
-            value={newMessage}
-            onChangeText={setNewMessage}
-            placeholder={i18n.t('messages.typePlaceholder') || 'Type a message...'}
-            placeholderTextColor="#a8a29e"
-            multiline
-            maxLength={500}
-            textAlign={isRTL ? 'right' : 'left'}
-          />
+
+        <View style={[s.inputRow, { paddingBottom: Math.max(insets.bottom, 12) }, isRTL && { flexDirection: 'row-reverse' }]}>
+          {/* Input pill: text + book icon inside same bg */}
+          <View style={s.inputPill}>
+            {isRTL && (
+              <TouchableOpacity style={s.pillIcon} onPress={() => setBookPickerVisible(true)} activeOpacity={0.7}>
+                <Ionicons name="book-outline" size={19} color="#a8a29e" />
+              </TouchableOpacity>
+            )}
+            <TextInput
+              style={[s.input, isRTL && { textAlign: 'right', direction: 'rtl' }]}
+              value={newMessage}
+              onChangeText={setNewMessage}
+              placeholder={i18n.t('messages.typePlaceholder') || 'Type a message...'}
+              placeholderTextColor="#a8a29e"
+              multiline
+              numberOfLines={1}
+              maxLength={500}
+            />
+            {!isRTL && (
+              <TouchableOpacity style={s.pillIcon} onPress={() => setBookPickerVisible(true)} activeOpacity={0.7}>
+                <Ionicons name="book-outline" size={19} color="#a8a29e" />
+              </TouchableOpacity>
+            )}
+          </View>
+
           <TouchableOpacity
-            style={[s.sendBtn, !newMessage.trim() && s.sendBtnDisabled]}
+            style={[s.sendBtn, (!newMessage.trim() && bookPreviews.length === 0) && s.sendBtnDisabled]}
             onPress={sendMessage}
-            disabled={!newMessage.trim()}
+            disabled={!newMessage.trim() && bookPreviews.length === 0}
             activeOpacity={0.8}
           >
             <Ionicons
@@ -704,6 +826,32 @@ export default function ChatScreen() {
           </TouchableOpacity>
         </View>
       </View>
+
+      {/* Seller book picker */}
+      <SellerBooksPickerModal
+        visible={bookPickerVisible}
+        onClose={() => setBookPickerVisible(false)}
+        onConfirm={(picked: PickerBook[]) => {
+          setBookPreviews(prev => {
+            const existingIds = new Set(prev.map(b => b.id));
+            const toAdd = picked
+              .filter(b => !existingIds.has(b.id))
+              .map(b => ({
+                id: b.id,
+                title: b.title,
+                author: b.author,
+                images: b.images,
+                image: b.images?.[0],
+                listing_type: b.listing_type,
+                price: b.price,
+              }));
+            return [...prev, ...toAdd].slice(0, 5);
+          });
+        }}
+        sellerId={recipientId}
+        sellerName={recipientName}
+        isRTL={isRTL}
+      />
 
       {/* ── 3-dot dropdown menu ───────────────────────────────────────────── */}
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
@@ -758,7 +906,31 @@ export default function ChatScreen() {
       />
 
       <Toast {...toast} />
-    </KeyboardAvoidingView>
+
+      {/* ── Review pre-prompt ── */}
+      <Modal visible={reviewPromptVisible} transparent animationType="fade" onRequestClose={handleReviewNotNow}>
+        <Pressable style={s.reviewOverlay} onPress={handleReviewNotNow}>
+          <Pressable style={s.reviewSheet} onPress={() => {}}>
+            <Text style={s.reviewEmoji}>⭐</Text>
+            <Text style={s.reviewTitle}>{isRTL ? 'נהנה מ-BookLoop?' : 'Enjoying BookLoop?'}</Text>
+            <Text style={s.reviewSub}>
+              {isRTL
+                ? 'דירוג קצר עוזר לנו לגדול ולהביא עוד ספרים לקהילה'
+                : 'A quick rating helps us grow and bring more books to the community'}
+            </Text>
+            <TouchableOpacity style={s.reviewYesBtn} onPress={handleReviewYes} activeOpacity={0.85}>
+              <Text style={s.reviewYesTxt}>{isRTL ? 'כן, אוהב את האפליקציה! ⭐' : 'Yes, I love it! ⭐'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.reviewNoBtn} onPress={handleReviewNotNow} activeOpacity={0.8}>
+              <Text style={s.reviewNoTxt}>{isRTL ? 'לא עכשיו' : 'Not right now'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleReviewDismiss} activeOpacity={0.7}>
+              <Text style={s.reviewDismissTxt}>{isRTL ? 'אל תשאל שוב' : "Don't ask again"}</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
   );
 }
 
@@ -766,6 +938,18 @@ export default function ChatScreen() {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fafaf9' },
+
+  // Review prompt
+  reviewOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 32 },
+  reviewSheet:   { backgroundColor: '#fff', borderRadius: 20, padding: 28, width: '100%', alignItems: 'center', gap: 8 },
+  reviewEmoji:   { fontSize: 40, marginBottom: 4 },
+  reviewTitle:   { fontSize: 20, fontWeight: '700', color: '#1c1917', textAlign: 'center' },
+  reviewSub:     { fontSize: 14, color: '#78716c', textAlign: 'center', lineHeight: 20, marginBottom: 8 },
+  reviewYesBtn:  { backgroundColor: '#2563eb', borderRadius: 12, paddingVertical: 13, paddingHorizontal: 24, width: '100%', alignItems: 'center' },
+  reviewYesTxt:  { color: '#fff', fontSize: 15, fontWeight: '600' },
+  reviewNoBtn:   { borderWidth: 1, borderColor: '#e7e5e4', borderRadius: 12, paddingVertical: 11, paddingHorizontal: 24, width: '100%', alignItems: 'center' },
+  reviewNoTxt:   { color: '#78716c', fontSize: 15, fontWeight: '500' },
+  reviewDismissTxt: { fontSize: 13, color: '#a8a29e', marginTop: 4, textDecorationLine: 'underline' },
   list:      { padding: 16, paddingBottom: 8 },
 
   bubble: {
@@ -859,7 +1043,13 @@ const s = StyleSheet.create({
     borderTopColor: '#e7e5e4',
   },
 
-  // Book preview card
+  // Multi-book preview strip
+  previewStrip: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#e7e5e4',
+  },
+
+  // Individual book preview row inside the strip
   bookPreview: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -867,7 +1057,7 @@ const s = StyleSheet.create({
     paddingVertical: 10,
     gap: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#e7e5e4',
+    borderBottomColor: '#f5f5f4',
   },
   bookPreviewImg: {
     width: 42,
@@ -908,6 +1098,13 @@ const s = StyleSheet.create({
     alignItems: 'center',
   },
 
+  // Timestamp-only row at bottom of book card (when content is empty)
+  cardTimeOnly: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    alignItems: 'flex-end',
+  },
+
   // Input bar
   inputRow: {
     flexDirection: 'row',
@@ -917,17 +1114,31 @@ const s = StyleSheet.create({
     alignItems: 'flex-end',
     gap: 8,
   },
-  input: {
+  // Input pill: text field + book icon share the same rounded container
+  inputPill: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
     backgroundColor: '#fafaf9',
     borderRadius: 22,
     borderWidth: 1,
     borderColor: '#e7e5e4',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+  },
+  // TextInput inside the pill — no own border/bg
+  input: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     fontSize: 15,
     maxHeight: 110,
     color: '#1c1917',
+  },
+  // Book icon anchored to the bottom-right of the pill
+  pillIcon: {
+    paddingRight: 10,
+    paddingLeft: 4,
+    paddingTop: 9,
+    paddingBottom: 9,
   },
   sendBtn:         { width: 40, height: 40, borderRadius: 20, backgroundColor: '#2563eb', justifyContent: 'center', alignItems: 'center', marginBottom: 1 },
   sendBtnDisabled: { backgroundColor: '#d1d5db' },

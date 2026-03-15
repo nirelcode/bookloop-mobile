@@ -1,14 +1,10 @@
 /**
- * AI Book Detection — Gemini 2.0 Flash (Vision)
- * Supports:
- *   - analyzeBookPhoto:   single book cover → title/author/genres/condition
- *   - detectBooksInPhoto: one photo of many books → array with bounding boxes
+ * AI Book Detection — calls the `detect-books` Supabase Edge Function.
+ * The Gemini API key lives server-side only; the app never sees it.
  */
 
 import * as ImageManipulator from 'expo-image-manipulator';
-
-const GEMINI_API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`;
+import { supabase } from './supabase';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,7 +35,7 @@ export interface AIAnalysisError {
   error: string;
   code: 'NO_API_KEY' | 'INVALID_IMAGE' | 'API_ERROR' | 'NO_BOOK_DETECTED' | 'PARSE_ERROR' | 'RATE_LIMITED';
 }
-export interface AIAnalysisSuccess   { success: true; data: BookDetectionResult; }
+export interface AIAnalysisSuccess    { success: true; data: BookDetectionResult; }
 export interface BatchAnalysisSuccess { success: true; books: BatchBookResult[]; }
 
 export type AIAnalysisResult   = AIAnalysisSuccess   | AIAnalysisError;
@@ -57,29 +53,24 @@ async function uriToBase64(uri: string): Promise<string> {
   return result.base64;
 }
 
-async function callGemini(base64: string, prompt: string): Promise<string> {
-  const res = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          { text: prompt },
-          { inline_data: { mime_type: 'image/jpeg', data: base64 } },
-        ],
-      }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
-    }),
+async function callEdgeFunction(mode: 'single' | 'batch', base64: string): Promise<string> {
+  const { data, error } = await supabase.functions.invoke('detect-books', {
+    body: { mode, base64 },
   });
 
-  if (res.status === 429) throw Object.assign(new Error('Rate limited'), { code: 'RATE_LIMITED' });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error?.message || `Gemini error ${res.status}`);
+  if (error) {
+    const code = (error as any).code;
+    if (code === 'RATE_LIMITED') throw Object.assign(new Error('Rate limited'), { code: 'RATE_LIMITED' });
+    throw new Error(error.message || 'Edge function error');
   }
 
-  const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  if (!data?.success) {
+    const code = data?.code;
+    if (code === 'RATE_LIMITED') throw Object.assign(new Error('Rate limited'), { code: 'RATE_LIMITED' });
+    throw new Error(data?.error || 'Edge function returned failure');
+  }
+
+  return data.text as string;
 }
 
 // ── Single book ───────────────────────────────────────────────────────────────
@@ -115,39 +106,9 @@ function parseSingleBook(text: string, imageUri: string): BookDetectionResult {
 }
 
 export async function analyzeBookPhoto(imageUri: string): Promise<AIAnalysisResult> {
-  if (!GEMINI_API_KEY) {
-    return { success: false, error: 'Gemini API key not configured. Add EXPO_PUBLIC_GEMINI_API_KEY to .env', code: 'NO_API_KEY' };
-  }
-
   try {
     const base64 = await uriToBase64(imageUri);
-    const prompt  = `You are an expert book identifier. Analyze this book cover carefully.
-INSTRUCTIONS:
-- Read ALL text on the cover precisely
-- Preserve the original language (Hebrew / English) for title and author — do NOT translate them
-- description: Write 1-2 sentences about the BOOK'S STORY OR CONTENT (not what you see on the cover). Write it IN HEBREW. If you don't know the book, write null.
-
-Return ONLY valid JSON (no markdown):
-{
-  "title": "EXACT title as on cover",
-  "author": "EXACT author as on cover",
-  "confidence": 0.95,
-  "condition": "good",
-  "genres": ["romance", "thriller"],
-  "description": "תיאור הספר בעברית",
-  "language": "hebrew"
-}
-condition: new|like_new|good|fair
-language: hebrew|english|other
-genres: 1-3 values ONLY from this exact list:
-romance, thriller, mystery, literary_fiction, fantasy, drama, historical_fiction,
-biography_memoir, crime_detective, adventure, science_fiction, teen_fiction,
-teen_fantasy, short_stories, horror, fiction, self_improvement, health_wellness,
-picture_books, educational_kids, graphic_novel_comics, teen_romance, comics_kids,
-poetry, cooking_baking, business_management, psychology, philosophy, religion,
-art_design, travel_writing, humor, children, history, science, travel`;
-
-    const text   = await callGemini(base64, prompt);
+    const text   = await callEdgeFunction('single', base64);
     const result = parseSingleBook(text, imageUri);
 
     if (result.confidence < 0.3) {
@@ -166,7 +127,6 @@ art_design, travel_writing, humor, children, history, science, travel`;
 // ── Batch detection ───────────────────────────────────────────────────────────
 
 function parseBatchBooks(text: string): BatchBookResult[] {
-  // Greedy regex captures the full JSON array even across newlines
   const match = text.match(/\[[\s\S]*\]/);
   if (!match) throw new Error('No JSON array in batch AI response');
 
@@ -184,12 +144,12 @@ function parseBatchBooks(text: string): BatchBookResult[] {
       const clamp = (v: any) => typeof v === 'number' ? Math.min(1, Math.max(0, v)) : 0;
 
       return {
-        title:             (item.title  || 'Unknown Title').trim(),
-        author:            (item.author || 'Unknown Author').trim(),
-        confidence:        conf,
+        title:              (item.title  || 'Unknown Title').trim(),
+        author:             (item.author || 'Unknown Author').trim(),
+        confidence:         conf,
         estimatedCondition: validConditions.includes(item.condition) ? item.condition : null,
-        detectedGenres:    Array.isArray(item.genres) ? (item.genres as string[]).slice(0, 3) : [],
-        description:       item.description || null,
+        detectedGenres:     Array.isArray(item.genres) ? (item.genres as string[]).slice(0, 3) : [],
+        description:        item.description || null,
         boundingBox: {
           x:      clamp(bb.x),
           y:      clamp(bb.y),
@@ -201,45 +161,10 @@ function parseBatchBooks(text: string): BatchBookResult[] {
 }
 
 export async function detectBooksInPhoto(imageUri: string): Promise<BatchAnalysisResult> {
-  if (!GEMINI_API_KEY) {
-    return { success: false, error: 'Gemini API key not configured. Add EXPO_PUBLIC_GEMINI_API_KEY to .env', code: 'NO_API_KEY' };
-  }
-
   try {
     const base64 = await uriToBase64(imageUri);
-    const prompt  = `You are an expert book detector. Identify EVERY book visible in this image.
-
-For EACH book return an object with its bounding box (normalised 0-1, origin at top-left).
-
-Return ONLY a valid JSON ARRAY (no markdown, no backticks):
-[
-  {
-    "title": "exact title",
-    "author": "exact author",
-    "confidence": 0.9,
-    "condition": "good",
-    "genres": ["fiction"],
-    "description": "תיאור הספר בעברית",
-    "boundingBox": { "x": 0.05, "y": 0.1, "width": 0.2, "height": 0.7 }
-  }
-]
-
-Rules:
-- boundingBox: fractions of full image dimensions (0.0 – 1.0)
-- condition: new|like_new|good|fair
-- description: Write 1-2 sentences about the BOOK'S STORY OR CONTENT in HEBREW. Write null if unknown.
-- genres: 1-3 values ONLY from this exact list:
-  romance, thriller, mystery, literary_fiction, fantasy, drama, historical_fiction,
-  biography_memoir, crime_detective, adventure, science_fiction, teen_fiction,
-  teen_fantasy, short_stories, horror, fiction, self_improvement, health_wellness,
-  picture_books, educational_kids, graphic_novel_comics, teen_romance, comics_kids,
-  poetry, cooking_baking, business_management, psychology, philosophy, religion,
-  art_design, travel_writing, humor, children, history, science, travel
-- Preserve original language for title/author
-- Return [] if no books found`;
-
-    const text  = await callGemini(base64, prompt);
-    const books = parseBatchBooks(text);
+    const text   = await callEdgeFunction('batch', base64);
+    const books  = parseBatchBooks(text);
 
     if (books.length === 0) {
       return { success: false, error: 'No books detected. Try a clearer photo.', code: 'NO_BOOK_DETECTED' };

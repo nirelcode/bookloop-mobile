@@ -16,7 +16,7 @@ import Constants from 'expo-constants';
 import { useAuthStore } from '../stores/authStore';
 import { useLanguageStore } from '../stores/languageStore';
 import { supabase } from '../lib/supabase';
-import { getChatReadAt } from '../lib/chatRead';
+import { getChatReadAt, getUserBaselineTime } from '../lib/chatRead';
 import { MessagesSkeletons } from '../components/Skeleton';
 import { useDataStore } from '../stores/dataStore';
 import NotificationPrompt from '../components/NotificationPrompt';
@@ -109,9 +109,13 @@ export default function MessagesScreen() {
         other_user: chat.buyer_id === user.id ? chat.seller : chat.buyer,
       }));
 
-      // Load per-chat read timestamps for unread indicators
+      // Load per-chat read timestamps for unread indicators.
+      // Use first-login baseline as fallback so unread chats (never opened) are
+      // correctly detected. Using last_message_at as fallback caused hasUnread to
+      // always be false for never-opened chats (same value on both sides of >).
+      const baselineTime = await getUserBaselineTime(user.id);
       const entries = await Promise.all(
-        formatted.map(async (c: Chat) => [c.id, await getChatReadAt(c.id, c.last_message_at ?? undefined)] as [string, string])
+        formatted.map(async (c: Chat) => [c.id, await getChatReadAt(c.id, baselineTime)] as [string, string])
       );
       setFetchError(false);
       storeSetConversations(formatted, Object.fromEntries(entries));
@@ -135,6 +139,39 @@ export default function MessagesScreen() {
     if (!hasCache) setLoading(true);
     fetchConversations();
   }, [fetchConversations]));
+
+  // Realtime: update last_message_at in the conversation list when a new message
+  // arrives so hasUnread reflects the change without a full refetch.
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase
+      .channel(`messages_list:${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload: any) => {
+          const msg = payload.new;
+          if (!msg?.chat_id || msg.sender_id === user.id) return;
+          const store = useDataStore.getState();
+          // Only update if we already have conversations loaded
+          if (store.messagesFetchedAt === 0) return;
+          const updated = store.conversations.map(c =>
+            c.id === msg.chat_id
+              ? { ...c, last_message: msg.content ?? c.last_message, last_message_at: msg.created_at }
+              : c
+          );
+          // Re-sort by last_message_at descending so the new message bubbles to top
+          updated.sort((a, b) => {
+            if (!a.last_message_at) return 1;
+            if (!b.last_message_at) return -1;
+            return b.last_message_at.localeCompare(a.last_message_at);
+          });
+          store.setConversations(updated, store.readAtMap);
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id]);
 
   // Show notification prompt on first Messages visit (non-Expo-Go only)
   useFocusEffect(useCallback(() => {
@@ -274,7 +311,7 @@ export default function MessagesScreen() {
           {avatarUrl && (
             <Image
               source={{ uri: avatarUrl }}
-              style={StyleSheet.absoluteFillObject}
+              style={[StyleSheet.absoluteFillObject, { borderRadius: 24 }]}
               contentFit="cover"
             />
           )}
@@ -288,11 +325,12 @@ export default function MessagesScreen() {
               <Text style={[s.time, hasUnread && s.timeUnread]}>{formatTime(item.last_message_at)}</Text>
             )}
           </View>
-          {item.last_message && (
-            <Text style={[s.preview, isRTL && s.rAlign, hasUnread && s.previewUnread]} numberOfLines={1}>
-              {item.last_message}
-            </Text>
-          )}
+          <Text
+            style={[s.preview, isRTL && s.rAlign, hasUnread && s.previewUnread, !item.last_message && s.previewEmpty]}
+            numberOfLines={1}
+          >
+            {item.last_message || (isRTL ? 'אין הודעות עדיין' : 'No messages yet')}
+          </Text>
         </View>
 
         <View style={s.rowEnd}>
@@ -453,6 +491,7 @@ const s = StyleSheet.create({
   timeUnread:   { color: C.primary, fontWeight: '600' },
   preview:      { fontSize: 13, color: C.muted },
   previewUnread:{ color: C.text, fontWeight: '500' },
+  previewEmpty: { fontStyle: 'italic' },
 
   rowEnd:    { alignItems: 'center', gap: 4 },
   unreadDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: C.primary },

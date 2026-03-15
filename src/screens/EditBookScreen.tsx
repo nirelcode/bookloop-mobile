@@ -6,18 +6,23 @@ import {
   StyleSheet,
   ScrollView,
   TextInput,
-  Image,
   Alert,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { compressImage } from '../lib/imageUtils';
 import { useAuthStore } from '../stores/authStore';
 import { useLanguageStore } from '../stores/languageStore';
+import { useDataStore } from '../stores/dataStore';
 import { supabase } from '../lib/supabase';
 import { BOOK_CONDITIONS, LISTING_TYPES } from '../constants/books';
+import { useToast, Toast } from '../components/Toast';
 import i18n from '../lib/i18n';
 
 const C = {
@@ -39,6 +44,8 @@ export default function EditBookScreen() {
   const { bookId } = route.params as { bookId: string };
   const { user }   = useAuthStore();
   const { isRTL }  = useLanguageStore();
+  const insets     = useSafeAreaInsets();
+  const { showToast, toast } = useToast();
 
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
@@ -47,15 +54,18 @@ export default function EditBookScreen() {
   const [description, setDescription] = useState('');
   const [price,       setPrice]       = useState('');
   const [condition,   setCondition]   = useState('good');
-  const [listingType, setListingType] = useState<'free' | 'sale' | 'trade'>('free');
-  const [lookingFor,  setLookingFor]  = useState('');
-  const [images,      setImages]      = useState<string[]>([]);
+  const [listingType,     setListingType]     = useState<'free' | 'sale' | 'trade'>('free');
+  const [lookingFor,      setLookingFor]      = useState('');
+  const [shippingType,    setShippingType]    = useState<'pickup' | 'shipping'>('pickup');
+  const [shippingDetails, setShippingDetails] = useState('');
+  const [images,          setImages]          = useState<string[]>([]);
   const [existingImages, setExistingImages] = useState<string[]>([]);
 
   // Track initial values to detect unsaved changes
   const initialRef = useRef<{
     title: string; author: string; description: string; price: string;
-    condition: string; listingType: string; lookingFor: string; existingImages: string[];
+    condition: string; listingType: string; lookingFor: string;
+    shippingType: string; shippingDetails: string; existingImages: string[];
   } | null>(null);
 
   useEffect(() => {
@@ -63,20 +73,28 @@ export default function EditBookScreen() {
   }, [bookId]);
 
   const isDirty = !loading && initialRef.current !== null && (
-    title          !== initialRef.current.title          ||
-    author         !== initialRef.current.author         ||
-    description    !== initialRef.current.description    ||
-    price          !== initialRef.current.price          ||
-    condition      !== initialRef.current.condition      ||
-    listingType    !== initialRef.current.listingType    ||
-    lookingFor     !== initialRef.current.lookingFor     ||
-    images.length  > 0                                   ||
+    title           !== initialRef.current.title           ||
+    author          !== initialRef.current.author          ||
+    description     !== initialRef.current.description     ||
+    price           !== initialRef.current.price           ||
+    condition       !== initialRef.current.condition       ||
+    listingType     !== initialRef.current.listingType     ||
+    lookingFor      !== initialRef.current.lookingFor      ||
+    shippingType    !== initialRef.current.shippingType    ||
+    shippingDetails !== initialRef.current.shippingDetails ||
+    images.length   > 0                                    ||
     existingImages.join() !== initialRef.current.existingImages.join()
   );
 
+  // Keep refs in sync so the listener always reads current values without re-registering
+  const isDirtyRef = useRef(false);
+  const savingRef  = useRef(false);
+  isDirtyRef.current = isDirty;
+  savingRef.current  = saving;
+
   useEffect(() => {
     const unsubscribe = navigation.addListener('beforeRemove', (e: any) => {
-      if (!isDirty || saving) return;
+      if (!isDirtyRef.current || savingRef.current) return;
       e.preventDefault();
       Alert.alert(
         isRTL ? 'לבטל שינויים?' : 'Discard changes?',
@@ -88,7 +106,7 @@ export default function EditBookScreen() {
       );
     });
     return unsubscribe;
-  }, [navigation, isDirty, saving, isRTL]);
+  }, [navigation, isRTL]);
 
   const loadBook = async () => {
     try {
@@ -105,16 +123,20 @@ export default function EditBookScreen() {
       setCondition(data.condition || 'good');
       setListingType(data.listing_type || 'free');
       setLookingFor(data.looking_for || '');
+      setShippingType(data.shipping_type || 'pickup');
+      setShippingDetails(data.shipping_details || '');
       setExistingImages(data.images || []);
       initialRef.current = {
-        title:          data.title || '',
-        author:         data.author || '',
-        description:    data.description || '',
-        price:          data.price ? String(data.price) : '',
-        condition:      data.condition || 'good',
-        listingType:    data.listing_type || 'free',
-        lookingFor:     data.looking_for || '',
-        existingImages: data.images || [],
+        title:           data.title || '',
+        author:          data.author || '',
+        description:     data.description || '',
+        price:           data.price ? String(data.price) : '',
+        condition:       data.condition || 'good',
+        listingType:     data.listing_type || 'free',
+        lookingFor:      data.looking_for || '',
+        shippingType:    data.shipping_type || 'pickup',
+        shippingDetails: data.shipping_details || '',
+        existingImages:  data.images || [],
       };
     } catch (e: any) {
       Alert.alert(i18n.t('common.error'), e.message);
@@ -204,21 +226,23 @@ export default function EditBookScreen() {
           price: listingType === 'sale' ? parseFloat(price) : null,
           listing_type: listingType,
           condition,
-          looking_for: listingType === 'trade' ? lookingFor : null,
-          images: allImages,
+          looking_for:      listingType === 'trade' ? lookingFor : null,
+          shipping_type:    shippingType,
+          shipping_details: shippingType === 'shipping' ? shippingDetails.trim() || null : null,
+          images:           allImages,
         })
         .eq('id', bookId);
 
       if (error) throw error;
 
-      // Clear dirty state before navigating back
-      initialRef.current = { title, author, description, price, condition, listingType, lookingFor, existingImages: [...existingImages, ...newUrls] };
+      // Clear dirty state so beforeRemove guard doesn't trigger
+      initialRef.current = { title, author, description, price, condition, listingType, lookingFor, shippingType, shippingDetails, existingImages: [...existingImages, ...newUrls] };
 
-      Alert.alert(
-        i18n.t('common.success'),
-        isRTL ? 'הספר עודכן בהצלחה' : 'Book updated successfully',
-        [{ text: i18n.t('common.ok'), onPress: () => navigation.goBack() }]
-      );
+      // Invalidate cache so MyBooksScreen + HomeScreen refresh
+      useDataStore.getState().invalidateMyBooks();
+      useDataStore.getState().invalidateHome();
+
+      navigation.goBack();
     } catch (e: any) {
       Alert.alert(i18n.t('publish.error'), e.message);
     } finally {
@@ -238,7 +262,8 @@ export default function EditBookScreen() {
   const totalImages = allImages.length;
 
   return (
-    <ScrollView style={s.container} contentContainerStyle={s.content}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <ScrollView style={s.container} contentContainerStyle={[s.content, { paddingBottom: 48 + insets.bottom }]}>
 
       {/* ── Photos ── */}
       <Text style={[s.label, isRTL && s.rAlign]}>{i18n.t('publish.photos')}</Text>
@@ -348,6 +373,35 @@ export default function EditBookScreen() {
         </>
       )}
 
+      {/* ── Shipping ── */}
+      <Text style={[s.label, isRTL && s.rAlign]}>{isRTL ? 'משלוח' : 'Shipping'}</Text>
+      <View style={s.shippingRow}>
+        {(['pickup', 'shipping'] as const).map(opt => (
+          <TouchableOpacity
+            key={opt}
+            style={[s.shippingChip, shippingType === opt && s.shippingChipActive]}
+            onPress={() => setShippingType(opt)}
+            activeOpacity={0.8}
+          >
+            <Text style={[s.shippingChipText, shippingType === opt && s.shippingChipTextActive]}>
+              {opt === 'pickup'
+                ? (isRTL ? 'איסוף עצמי' : 'Pickup only')
+                : (isRTL ? 'משלוח' : 'Shipping')}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      {shippingType === 'shipping' && (
+        <TextInput
+          style={[s.input, s.textArea, isRTL && s.rInput]}
+          value={shippingDetails}
+          onChangeText={setShippingDetails}
+          placeholder={isRTL ? 'פרטי משלוח (לדוגמה: חינם עד 20 ק"מ, 30 ₪ לכל הארץ)' : 'Shipping details (e.g. free locally, ₪30 nationwide)'}
+          multiline
+          textAlign={isRTL ? 'right' : 'left'}
+        />
+      )}
+
       {/* ── Description ── */}
       <Text style={[s.label, isRTL && s.rAlign]}>{i18n.t('publish.description')}</Text>
       <TextInput
@@ -375,15 +429,17 @@ export default function EditBookScreen() {
         )}
       </TouchableOpacity>
     </ScrollView>
+    <Toast {...toast} />
+    </KeyboardAvoidingView>
   );
 }
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
-  content:   { padding: 20, paddingBottom: 48 },
+  content:   { padding: 20 },
   centered:  { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  label: { fontSize: 13, fontWeight: '600', color: C.sub, marginBottom: 8, marginTop: 18 },
+  label: { fontSize: 14, fontWeight: '600', color: C.text, marginBottom: 8, marginTop: 20 },
   rAlign: { textAlign: 'right' },
 
   // Images
@@ -401,50 +457,52 @@ const s = StyleSheet.create({
     width: 90,
     height: 110,
     borderRadius: 10,
-    borderWidth: 2,
-    borderColor: C.primary,
+    borderWidth: 1.5,
+    borderColor: C.border,
     borderStyle: 'dashed',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 4,
+    backgroundColor: C.white,
   },
-  addImgText: { fontSize: 12, color: C.primary, fontWeight: '600' },
+  addImgText: { fontSize: 11, color: C.muted, fontWeight: '500' },
 
   // Listing type pills
   pills: { flexDirection: 'row', gap: 8 },
   pill: {
     flex: 1,
-    borderWidth: 2,
-    borderColor: C.border,
-    backgroundColor: C.white,
-    paddingVertical: 12,
-    borderRadius: 10,
+    backgroundColor: '#f5f5f4',
+    paddingVertical: 13,
+    borderRadius: 12,
     alignItems: 'center',
   },
-  pillActive: { borderColor: C.primary, backgroundColor: C.primaryLight },
+  pillActive: { borderColor: C.primary + '60', backgroundColor: C.primaryLight },
   pillText:   { fontSize: 13, fontWeight: '600', color: C.muted },
   pillTextActive: { color: C.primary },
 
   // Condition pills
   conditionPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   condPill: {
-    borderWidth: 1,
-    borderColor: C.border,
-    backgroundColor: C.white,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 8,
+    backgroundColor: '#f5f5f4',
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: 10,
   },
-  condPillActive: { borderColor: C.primary, backgroundColor: C.primaryLight },
-  condPillText:   { fontSize: 13, color: C.muted },
+  condPillActive: { borderColor: C.primary + '60', backgroundColor: C.primaryLight },
+  condPillText:   { fontSize: 13, color: C.sub },
   condPillTextActive: { color: C.primary, fontWeight: '600' },
+  shippingRow:            { flexDirection: 'row', gap: 8 },
+  shippingChip:           { flex: 1, paddingVertical: 11, borderRadius: 12, alignItems: 'center', backgroundColor: '#f5f5f4' },
+  shippingChipActive:     { backgroundColor: C.primaryLight, borderColor: C.primary + '60' },
+  shippingChipText:       { fontSize: 14, fontWeight: '500', color: C.sub },
+  shippingChipTextActive: { color: C.primary, fontWeight: '600' },
 
   // Inputs
   input: {
     backgroundColor: C.white,
     borderWidth: 1,
     borderColor: C.border,
-    borderRadius: 10,
+    borderRadius: 12,
     padding: 14,
     fontSize: 16,
     color: C.text,
@@ -454,16 +512,16 @@ const s = StyleSheet.create({
 
   // Update button
   updateBtn: {
-    backgroundColor: C.emerald,
-    padding: 16,
+    backgroundColor: C.primary,
+    paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
     marginTop: 32,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.07,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 3,
   },
   updateBtnDisabled: { opacity: 0.5 },
   updateBtnText: { color: C.white, fontSize: 16, fontWeight: '600' },

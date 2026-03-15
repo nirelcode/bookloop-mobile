@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   View,
   Text,
@@ -32,16 +33,17 @@ const C = {
 };
 
 function BookCard({ item, onPress }: { item: Book; onPress: () => void }) {
+  const { isRTL } = useLanguageStore();
   let priceLabel = '';
   let priceColor = C.primary;
   if (item.listing_type === 'sale' && item.price) {
     priceLabel = `₪${item.price}`;
     priceColor = C.primary;
   } else if (item.listing_type === 'free') {
-    priceLabel = 'Free';
+    priceLabel = isRTL ? 'חינם' : 'Free';
     priceColor = C.emerald;
   } else if (item.listing_type === 'trade') {
-    priceLabel = 'Trade';
+    priceLabel = isRTL ? 'להחלפה' : 'Trade';
     priceColor = C.amber;
   }
 
@@ -68,10 +70,11 @@ function BookCard({ item, onPress }: { item: Book; onPress: () => void }) {
 }
 
 export default function SellerProfileScreen() {
-  const route     = useRoute();
+  const route      = useRoute();
   const navigation = useNavigation<any>();
-  const { isRTL } = useLanguageStore();
-  const { user }  = useAuthStore();
+  const insets     = useSafeAreaInsets();
+  const { isRTL }  = useLanguageStore();
+  const { user }   = useAuthStore();
 
   const { sellerId, sellerName } = route.params as { sellerId: string; sellerName?: string };
 
@@ -136,7 +139,7 @@ export default function SellerProfileScreen() {
         renderItem={renderBook}
         numColumns={2}
         columnWrapperStyle={s.row}
-        contentContainerStyle={s.listContent}
+        contentContainerStyle={[s.listContent, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
           <View>
