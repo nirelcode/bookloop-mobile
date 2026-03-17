@@ -26,7 +26,7 @@
 
 <!-- Add new entries at the TOP, below this line -->
 
-## [PENDING] 2026-03-08 — Add shipping_type + shipping_details to books table
+## [DONE] 2026-03-16 — Add shipping_type + shipping_details to books table
 **Origin**: bookloop_mobile
 **Type**: Database Migration
 
@@ -38,8 +38,8 @@
 - CatalogScreen + FiltersModal: "משלוח" filter
 
 ### What the other project needs to do:
-- [ ] Update `src/lib/database.types.ts` — add `shipping_type: string` and `shipping_details: string | null` to books `Row`, `Insert`, and `Update` types
-- [ ] Show shipping info on book detail page (webapp)
+- [x] Update `src/lib/database.types.ts` — add `shipping_type: string` and `shipping_details: string | null` to books `Row`, `Insert`, and `Update` types
+- [x] Show shipping info on book detail page (webapp)
 - [ ] Add shipping filter to catalog/search (optional)
 
 ### Migration SQL (already applied to Supabase):
@@ -49,7 +49,7 @@ ALTER TABLE books
   ADD COLUMN shipping_details text;
 ```
 
-## [PENDING] 2026-02-24 — Add push_token to profiles table
+## [DONE] 2026-03-16 — Add push_token to profiles table
 **Origin**: bookloop_mobile
 **Type**: Database Migration
 
@@ -62,8 +62,8 @@ ALTER TABLE books
 - A DB Webhook must be created in Supabase dashboard: INSERT on `messages` → calls this function
 
 ### What the other project needs to do:
-- [ ] Run migration SQL below in Supabase SQL editor
-- [ ] Update `src/lib/database.types.ts` — add `push_token: string | null` to profiles `Row`, `Insert`, and `Update` types
+- [x] Run migration SQL below in Supabase SQL editor
+- [x] Update `src/lib/database.types.ts` — add `push_token: string | null` to profiles `Row`, `Insert`, and `Update` types
 
 ### Migration SQL (apply via Supabase dashboard → SQL Editor):
 ```sql
