@@ -38,6 +38,7 @@ export interface Book {
   status: 'active' | 'completed' | 'unlisted';
   created_at: string;
   updated_at: string;
+  view_count?: number;
   // Joined fields
   profiles?: Profile;
   distance?: number;

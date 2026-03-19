@@ -117,6 +117,8 @@ export default function BookDetailScreen() {
   useEffect(() => {
     fetchBook();
     if (user) checkWishlist();
+    // Record view (fire and forget — non-blocking, skips own books server-side)
+    if (user) supabase.rpc('record_book_view', { p_book_id: bookId }).then(() => {});
   }, [bookId, user]);
 
   // Fetch similar books once the main book loads
