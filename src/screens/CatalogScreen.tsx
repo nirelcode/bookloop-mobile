@@ -21,6 +21,7 @@ import { supabase } from '../lib/supabase';
 import { Book } from '../types';
 import { useLanguageStore } from '../stores/languageStore';
 import { useLocationStore } from '../stores/locationStore';
+import { useAuthStore } from '../stores/authStore';
 import { haversineKm } from '../lib/locationUtils';
 import i18n from '../lib/i18n';
 import type { CatalogScreenNavigationProp } from '../types/navigation';
@@ -209,9 +210,10 @@ function BookCard({ item, isRTL, onPress, cardWidth }: { item: Book; isRTL: bool
 
 // ── Main screen ────────────────────────────────────────────────────────────
 
-type SortOption = 'new' | 'price_asc' | 'price_desc';
+type SortOption = 'for_you' | 'new' | 'price_asc' | 'price_desc';
 
 const SORT_OPTIONS: { value: SortOption; labelEn: string; labelHe: string; icon: string }[] = [
+  { value: 'for_you',    labelEn: 'For You',            labelHe: 'בשבילך',           icon: 'sparkles-outline'      },
   { value: 'new',        labelEn: 'Newest First',       labelHe: 'חדש ראשון',        icon: 'time-outline'          },
   { value: 'price_asc',  labelEn: 'Price: Low to High', labelHe: 'מחיר: נמוך לגבוה', icon: 'trending-up-outline'   },
   { value: 'price_desc', labelEn: 'Price: High to Low', labelHe: 'מחיר: גבוה לנמוך', icon: 'trending-down-outline' },
@@ -220,14 +222,13 @@ const SORT_OPTIONS: { value: SortOption; labelEn: string; labelHe: string; icon:
 const ITEMS_PER_PAGE = 20;
 const NEAR_ME_RADIUS_KM = 25;
 
-const DEBUG_COORDS: { latitude: number; longitude: number } | null = null;
-
 export default function CatalogScreen() {
   const navigation  = useNavigation<CatalogScreenNavigationProp>();
   const route       = useRoute<any>();
   const { isRTL }     = useLanguageStore();
   const { coords }    = useLocationStore();
   const { blockedIds } = useDataStore();
+  const user          = useAuthStore(s => s.user);
   const insets      = useSafeAreaInsets();
   const { width: screenW } = useWindowDimensions();
   const numColumns  = getNumColumns(screenW);
@@ -246,8 +247,11 @@ export default function CatalogScreen() {
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [filters, setFilters]     = useState<any>({});
   const [showFilters, setShowFilters] = useState(false);
-  const [sort, setSort]           = useState<SortOption>('new');
+  const [sort, setSort]           = useState<SortOption>('for_you');
   const [showSort, setShowSort]   = useState(false);
+
+  // ── Stable jitter seed for personalized feed (regenerated on pull-to-refresh) ──
+  const jitterSeed = useRef(Math.random());
 
   // ── Near Me waterfall state (refs so they don't trigger re-renders) ───────
   const nearMeCityQueueRef = useRef<string[]>([]);
@@ -316,20 +320,25 @@ export default function CatalogScreen() {
     }
 
     try {
-      let query = supabase
-        .from('books')
-        .select('id,title,author,city,images,listing_type,price,condition,genres,created_at,location_lat,location_lng,user_id', { count: 'exact' })
-        .eq('status', 'active');
-
-      if (blockedIds.length > 0) {
-        query = query.not('user_id', 'in', `(${blockedIds.join(',')})`);
-      }
-
-      const effectiveCoords = DEBUG_COORDS ?? coords;
+      const effectiveCoords = coords;
       const isNearMe = !!(filters.nearMe && effectiveCoords);
+
+      // Expand genre filter keys to DB sub-values
+      const dbGenres: string[] | null = filters.genres?.length
+        ? (filters.genres as string[]).flatMap((g: string) => GENRE_DB_GROUPS[g] ?? [g])
+        : null;
 
       if (isNearMe) {
         // ── Near Me waterfall: fetch one city at a time in distance order ──
+        let query = supabase
+          .from('books')
+          .select('id,title,author,city,images,listing_type,price,condition,genres,created_at,location_lat,location_lng,user_id', { count: 'exact' })
+          .eq('status', 'active');
+
+        if (blockedIds.length > 0) {
+          query = query.not('user_id', 'in', `(${blockedIds.join(',')})`);
+        }
+
         if (reset) {
           const queue = Object.entries(CITY_COORDS)
             .map(([city, cc]) => ({ city, dist: haversineKm(effectiveCoords!.latitude, effectiveCoords!.longitude, cc.lat, cc.lng) }))
@@ -357,10 +366,7 @@ export default function CatalogScreen() {
 
         if (debouncedSearch)           query = query.or(`title.ilike.%${debouncedSearch}%,author.ilike.%${debouncedSearch}%`);
         if (filters.listingType)       query = query.eq('listing_type', filters.listingType);
-        if (filters.genres?.length) {
-          const dbValues = (filters.genres as string[]).flatMap((g: string) => GENRE_DB_GROUPS[g] ?? [g]);
-          query = query.overlaps('genres', dbValues);
-        }
+        if (dbGenres)                  query = query.overlaps('genres', dbGenres);
         if (filters.conditions?.length) query = query.in('condition', filters.conditions);
         if (filters.shipping)           query = query.eq('shipping_type', 'shipping');
         if (filters.minPrice !== undefined) query = query.gte('price', filters.minPrice);
@@ -372,7 +378,6 @@ export default function CatalogScreen() {
         const newBooks = (data ?? []) as Book[];
 
         if (newBooks.length < ITEMS_PER_PAGE) {
-          // City exhausted — advance to next city
           nearMeCityIndexRef.current = ci + 1;
           nearMeCityPageRef.current  = 0;
           setHasMore(ci + 1 < queue.length);
@@ -384,8 +389,52 @@ export default function CatalogScreen() {
         setBooks(prev => reset ? newBooks : [...prev, ...newBooks.filter(b => !prev.some(p => p.id === b.id))]);
         if (reset) setFetchError(false);
 
+      } else if (sort === 'for_you' && user) {
+        // ── Personalized feed via RPC ─────────────────────────────────────
+        const { data, error } = await supabase.rpc('get_personalized_catalog', {
+          p_limit: ITEMS_PER_PAGE,
+          p_offset: currentPage * ITEMS_PER_PAGE,
+          p_search: debouncedSearch || null,
+          p_listing_type: filters.listingType || null,
+          p_genres: dbGenres,
+          p_conditions: filters.conditions?.length ? filters.conditions : null,
+          p_city: filters.city || null,
+          p_shipping: !!filters.shipping,
+          p_min_price: filters.minPrice ?? null,
+          p_max_price: filters.maxPrice ?? null,
+          p_blocked_ids: blockedIds.length > 0 ? blockedIds : [],
+          p_seed: jitterSeed.current,
+        });
+
+        if (error) throw error;
+
+        const rows = (data ?? []) as any[];
+        const newBooks = rows.map(r => ({
+          id: r.id, title: r.title, author: r.author, city: r.city,
+          images: r.images, listing_type: r.listing_type, price: r.price,
+          condition: r.condition, genres: r.genres, created_at: r.created_at,
+          location_lat: r.location_lat, location_lng: r.location_lng, user_id: r.user_id,
+        })) as Book[];
+
+        setBooks(prev => reset ? newBooks : [...prev, ...newBooks.filter(b => !prev.some(p => p.id === b.id))]);
+        setHasMore(newBooks.length === ITEMS_PER_PAGE);
+        setPage(currentPage + 1);
+        if (reset) {
+          setTotalCount(rows.length > 0 ? Number(rows[0].total_count) : 0);
+          setFetchError(false);
+        }
+
       } else {
-        // ── Normal mode ────────────────────────────────────────────────────
+        // ── Normal mode (newest / price sort) ─────────────────────────────
+        let query = supabase
+          .from('books')
+          .select('id,title,author,city,images,listing_type,price,condition,genres,created_at,location_lat,location_lng,user_id', { count: 'exact' })
+          .eq('status', 'active');
+
+        if (blockedIds.length > 0) {
+          query = query.not('user_id', 'in', `(${blockedIds.join(',')})`);
+        }
+
         if (sort === 'price_asc') {
           query = query.order('price', { ascending: true });
         } else if (sort === 'price_desc') {
@@ -397,10 +446,7 @@ export default function CatalogScreen() {
 
         if (debouncedSearch)             query = query.or(`title.ilike.%${debouncedSearch}%,author.ilike.%${debouncedSearch}%`);
         if (filters.listingType)         query = query.eq('listing_type', filters.listingType);
-        if (filters.genres?.length) {
-          const dbValues = (filters.genres as string[]).flatMap((g: string) => GENRE_DB_GROUPS[g] ?? [g]);
-          query = query.overlaps('genres', dbValues);
-        }
+        if (dbGenres)                    query = query.overlaps('genres', dbGenres);
         if (filters.conditions?.length)   query = query.in('condition', filters.conditions);
         if (filters.city)                query = query.eq('city', filters.city);
         if (filters.shipping)            query = query.eq('shipping_type', 'shipping');
@@ -427,11 +473,12 @@ export default function CatalogScreen() {
       setLoadingMore(false);
       setRefreshing(false);
     }
-  }, [debouncedSearch, filters, hasMore, page, sort, coords, blockedIds]);
+  }, [debouncedSearch, filters, hasMore, page, sort, coords, blockedIds, user]);
 
   useEffect(() => { fetchBooks(true); }, [debouncedSearch, filters, sort]);
 
   const onRefresh = useCallback(async () => {
+    jitterSeed.current = Math.random();
     setRefreshing(true);
     await fetchBooks(true);
   }, [debouncedSearch, filters]);

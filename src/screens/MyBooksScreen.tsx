@@ -260,6 +260,16 @@ export default function MyBooksScreen() {
     } catch (e: any) { Alert.alert(i18n.t('common.error'), e.message); }
   };
 
+  const handleBulkRelist = async () => {
+    const count = selectedIds.size;
+    try {
+      const { error } = await supabase.from('books').update({ status: 'active' }).in('id', [...selectedIds]);
+      if (error) throw error;
+      cancelSelect(); fetchMyBooks();
+      showToast(isRTL ? `${count} ספרים פורסמו מחדש` : `${count} books re-listed`);
+    } catch (e: any) { Alert.alert(i18n.t('common.error'), e.message); }
+  };
+
   const handleBulkSold = () => {
     const count = selectedIds.size;
     Alert.alert(
@@ -656,14 +666,23 @@ export default function MyBooksScreen() {
       {/* ── Floating bulk action bar ── */}
       {selectMode && selectedIds.size > 0 && (
         <View style={[s.bulkBar, { bottom: Math.max(insets.bottom, 16) }]}>
-          <TouchableOpacity style={[s.bulkBtn, { backgroundColor: C.amber }]} onPress={handleBulkHide} activeOpacity={0.85}>
-            <Ionicons name="eye-off-outline" size={16} color={C.white} />
-            <Text style={s.bulkBtnTxt}>{isRTL ? 'הסתר' : 'Hide'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.bulkBtn, { backgroundColor: C.emerald }]} onPress={handleBulkSold} activeOpacity={0.85}>
-            <Ionicons name="checkmark-done-outline" size={16} color={C.white} />
-            <Text style={s.bulkBtnTxt}>{isRTL ? 'נמכר' : 'Sold'}</Text>
-          </TouchableOpacity>
+          {(statusFilter === 'unlisted' || statusFilter === 'sold') ? (
+            <TouchableOpacity style={[s.bulkBtn, { backgroundColor: C.emerald }]} onPress={handleBulkRelist} activeOpacity={0.85}>
+              <Ionicons name="arrow-undo-outline" size={16} color={C.white} />
+              <Text style={s.bulkBtnTxt}>{isRTL ? 'פרסם שוב' : 'Re-list'}</Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity style={[s.bulkBtn, { backgroundColor: C.amber }]} onPress={handleBulkHide} activeOpacity={0.85}>
+                <Ionicons name="eye-off-outline" size={16} color={C.white} />
+                <Text style={s.bulkBtnTxt}>{isRTL ? 'הסתר' : 'Hide'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.bulkBtn, { backgroundColor: C.emerald }]} onPress={handleBulkSold} activeOpacity={0.85}>
+                <Ionicons name="checkmark-done-outline" size={16} color={C.white} />
+                <Text style={s.bulkBtnTxt}>{isRTL ? 'נמכר' : 'Sold'}</Text>
+              </TouchableOpacity>
+            </>
+          )}
           <TouchableOpacity style={[s.bulkBtn, { backgroundColor: C.red }]} onPress={handleBulkDelete} activeOpacity={0.85}>
             <Ionicons name="trash-outline" size={16} color={C.white} />
             <Text style={s.bulkBtnTxt}>

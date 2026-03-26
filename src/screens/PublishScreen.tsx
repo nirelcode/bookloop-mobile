@@ -997,6 +997,26 @@ export default function PublishScreen() {
     });
   }, [phase, navigation]);
 
+  // ── Unsaved changes guard ─────────────────────────────────────────────────
+  useEffect(() => {
+    const hasWork = phase !== 'idle' || books.length > 0 || !!sourceUri;
+    if (!hasWork) return;
+
+    const unsub = navigation.addListener('beforeRemove', (e: any) => {
+      if (publishing) return; // allow navigation after successful publish
+      e.preventDefault();
+      Alert.alert(
+        isRTL ? 'יציאה מפרסום?' : 'Discard draft?',
+        isRTL ? 'יש לך ספרים שעדיין לא פורסמו. הסשן נשמר ותוכל להמשיך מאוחר יותר.' : 'You have unpublished books. Your session is saved and you can continue later.',
+        [
+          { text: isRTL ? 'המשך לערוך' : 'Keep editing', style: 'cancel' },
+          { text: isRTL ? 'יציאה' : 'Leave', style: 'destructive', onPress: () => navigation.dispatch(e.data.action) },
+        ],
+      );
+    });
+    return unsub;
+  }, [phase, books.length, sourceUri, publishing, navigation, isRTL]);
+
   // ── Session restore ────────────────────────────────────────────────────────
 
   useEffect(() => {

@@ -229,15 +229,38 @@ export default function SettingsScreen() {
         }
       }
 
-      // Delete all data + auth user in one RPC (SECURITY DEFINER runs as postgres)
-      const { error: rpcErr } = await supabase.rpc('delete_my_account');
-      if (rpcErr) throw rpcErr;
+      // Final confirmation before permanent deletion
+      setDeleteLoading(false);
+      Alert.alert(
+        isRTL ? 'בטוחים?' : 'Are you sure?',
+        isRTL
+          ? 'כל הנתונים שלך יימחקו לצמיתות. לא ניתן לשחזר.'
+          : 'All your data will be permanently deleted. This cannot be undone.',
+        [
+          { text: isRTL ? 'ביטול' : 'Cancel', style: 'cancel' },
+          {
+            text: isRTL ? 'מחק לצמיתות' : 'Delete Forever',
+            style: 'destructive',
+            onPress: async () => {
+              setDeleteLoading(true);
+              try {
+                // Delete all data + auth user in one RPC (SECURITY DEFINER runs as postgres)
+                const { error: rpcErr } = await supabase.rpc('delete_my_account');
+                if (rpcErr) throw rpcErr;
 
-      // Clear local flags so re-registration starts fresh
-      await AsyncStorage.removeItem('bookloop_setup_done');
-      // Sign out locally
-      useAuthStore.getState().signOut();
-      supabase.auth.signOut();
+                // Clear local flags so re-registration starts fresh
+                await AsyncStorage.removeItem('bookloop_setup_done');
+                // Sign out locally
+                useAuthStore.getState().signOut();
+                supabase.auth.signOut();
+              } catch (e: any) {
+                setDeleteError(e?.message ?? (isRTL ? 'שגיאה, נסו שוב.' : 'Something went wrong.'));
+                setDeleteLoading(false);
+              }
+            },
+          },
+        ],
+      );
     } catch (e: any) {
       setDeleteError(e?.message ?? (isRTL ? 'שגיאה, נסו שוב.' : 'Something went wrong.'));
       setDeleteLoading(false);

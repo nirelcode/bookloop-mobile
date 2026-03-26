@@ -51,7 +51,7 @@ export function CityPickerModal({ visible, selected, isRTL, onSelect, onClose }:
           <View style={s.handle} />
 
           {/* Header */}
-          <View style={s.header}>
+          <View style={[s.header, isRTL && { flexDirection: 'row-reverse' }]}>
             <Text style={s.title}>{isRTL ? 'בחרו עיר' : 'Select City'}</Text>
             <TouchableOpacity onPress={handleClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
               <Ionicons name="close" size={22} color={C.sub} />

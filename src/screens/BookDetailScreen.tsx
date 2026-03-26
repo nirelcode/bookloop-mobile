@@ -29,6 +29,7 @@ import { BookDetailSkeleton } from '../components/Skeleton';
 import { useToast, Toast } from '../components/Toast';
 import { ReportModal } from '../components/ReportModal';
 import { GENRE_LABEL_MAP, DB_VALUE_TO_LABEL } from '../constants/books';
+import { formatLastActive } from '../lib/formatLastActive';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 
@@ -76,12 +77,13 @@ export default function BookDetailScreen() {
   const [imgIndex, setImgIndex]     = useState(0);
   const [zoomVisible, setZoomVisible]     = useState(false);
   const [reportVisible, setReportVisible] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   const { showToast, toast } = useToast();
 
   const { user } = useAuthStore();
   const { isRTL, language } = useLanguageStore();
-  const { addFavoriteId, removeFavoriteId, invalidateWishlist } = useDataStore();
+  const { addFavoriteId, removeFavoriteId, invalidateWishlist, blockedIds } = useDataStore();
 
   useEffect(() => {
     const isOwn = book?.user_id === user?.id;
@@ -117,22 +119,28 @@ export default function BookDetailScreen() {
   useEffect(() => {
     fetchBook();
     if (user) checkWishlist();
-    // Record view (fire and forget — non-blocking, skips own books server-side)
-    if (user) supabase.rpc('record_book_view', { p_book_id: bookId }).then(() => {});
+    // Record view + update genre affinities (fire and forget)
+    if (user) {
+      supabase.rpc('record_book_view', { p_book_id: bookId });
+      supabase.rpc('update_genre_affinities', { p_book_id: bookId });
+    }
   }, [bookId, user]);
 
-  // Fetch similar books once the main book loads
+  // Fetch similar books once the main book loads, excluding blocked users
   useEffect(() => {
     if (!book) return;
-    supabase
+    let query = supabase
       .from('books')
       .select('id,title,author,city,images,listing_type,price,condition')
       .eq('status', 'active')
       .eq('city', book.city)
       .neq('id', book.id)
-      .limit(8)
-      .then(({ data }) => { if (data) setSimilarBooks(data as Book[]); });
-  }, [book?.id]);
+      .limit(8);
+    if (blockedIds.length > 0) {
+      query = query.not('user_id', 'in', `(${blockedIds.join(',')})`);
+    }
+    query.then(({ data }) => { if (data) setSimilarBooks(data as Book[]); });
+  }, [book?.id, blockedIds]);
 
   const fetchBook = async () => {
     try {
@@ -143,8 +151,10 @@ export default function BookDetailScreen() {
         .single();
       if (error) throw error;
       setBook(data as Book);
+      setFetchError(false);
     } catch (error) {
       console.error('Error fetching book:', error);
+      if (!book) setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -270,19 +280,35 @@ export default function BookDetailScreen() {
     return (
       <View style={st.centered}>
         <View style={st.errorIconWrap}>
-          <Ionicons name="book-outline" size={44} color={C.muted} />
+          <Ionicons name={fetchError ? 'cloud-offline-outline' : 'book-outline'} size={44} color={fetchError ? '#ef4444' : C.muted} />
         </View>
-        <Text style={st.notFound}>{i18n.t('book.notFound')}</Text>
-        <Text style={st.notFoundSub}>
-          {isRTL ? 'הספר הוסר או שאינו זמין' : 'This listing may have been removed'}
+        <Text style={st.notFound}>
+          {fetchError
+            ? (isRTL ? 'לא הצלחנו לטעון' : "Couldn't load book")
+            : i18n.t('book.notFound')}
         </Text>
-        <TouchableOpacity
-          style={st.goBackBtn}
-          onPress={() => navigation.goBack()}
-          activeOpacity={0.8}
-        >
-          <Text style={st.goBackTxt}>{isRTL ? 'חזור' : 'Go back'}</Text>
-        </TouchableOpacity>
+        <Text style={st.notFoundSub}>
+          {fetchError
+            ? (isRTL ? 'בדוק את החיבור לאינטרנט ונסה שוב' : 'Check your connection and try again')
+            : (isRTL ? 'הספר הוסר או שאינו זמין' : 'This listing may have been removed')}
+        </Text>
+        {fetchError ? (
+          <TouchableOpacity
+            style={st.goBackBtn}
+            onPress={() => { setLoading(true); setFetchError(false); fetchBook(); }}
+            activeOpacity={0.8}
+          >
+            <Text style={st.goBackTxt}>{isRTL ? 'נסה שוב' : 'Try again'}</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={st.goBackBtn}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.8}
+          >
+            <Text style={st.goBackTxt}>{isRTL ? 'חזור' : 'Go back'}</Text>
+          </TouchableOpacity>
+        )}
       </View>
     );
   }
@@ -449,6 +475,12 @@ export default function BookDetailScreen() {
                     <View style={[st.sellerCityRow, isRTL && st.rowRev]}>
                       <Ionicons name="location-outline" size={12} color={C.muted} />
                       <Text style={st.sellerCity}>{book.profiles.city}</Text>
+                    </View>
+                  )}
+                  {book.profiles.last_active_at && formatLastActive(book.profiles.last_active_at, isRTL) && (
+                    <View style={[st.sellerCityRow, isRTL && st.rowRev, { marginTop: 2 }]}>
+                      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: (Date.now() - new Date(book.profiles.last_active_at).getTime()) < 3_600_000 ? '#059669' : C.muted }} />
+                      <Text style={st.sellerCity}>{formatLastActive(book.profiles.last_active_at, isRTL)}</Text>
                     </View>
                   )}
                 </View>

@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "BookLoop Web",
+      "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+      "runtimeArgs": ["C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js", "expo", "start", "--web", "--port", "8083"],
+      "port": 8083,
+      "autoPort": true
+    }
+  ]
+}

@@ -45,6 +45,7 @@ export default function BlockedUsersScreen() {
 
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [loading, setLoading]           = useState(true);
+  const [fetchError, setFetchError]     = useState(false);
 
   useEffect(() => {
     navigation.setOptions({
@@ -55,13 +56,20 @@ export default function BlockedUsersScreen() {
   const load = useCallback(async () => {
     if (!user) return;
     setLoading(true);
-    const { data } = await supabase
-      .from('blocked_users')
-      .select('blocked_id, profile:profiles!blocked_users_blocked_id_fkey(id, name, avatar_url)')
-      .eq('blocker_id', user.id)
-      .order('created_at', { ascending: false });
-    setBlockedUsers((data as any[]) ?? []);
-    setLoading(false);
+    try {
+      const { data, error } = await supabase
+        .from('blocked_users')
+        .select('blocked_id, profile:profiles!blocked_users_blocked_id_fkey(id, name, avatar_url)')
+        .eq('blocker_id', user.id)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      setBlockedUsers((data as any[]) ?? []);
+      setFetchError(false);
+    } catch {
+      setFetchError(true);
+    } finally {
+      setLoading(false);
+    }
   }, [user]);
 
   useEffect(() => { load(); }, [load]);
@@ -95,6 +103,22 @@ export default function BlockedUsersScreen() {
     return (
       <View style={s.center}>
         <ActivityIndicator color={C.primary} />
+      </View>
+    );
+  }
+
+  if (fetchError && blockedUsers.length === 0) {
+    return (
+      <View style={s.center}>
+        <View style={s.emptyIconWrap}>
+          <Ionicons name="cloud-offline-outline" size={44} color="#ef4444" />
+        </View>
+        <Text style={[s.emptyTitle, isRTL && { textAlign: 'right' }]}>
+          {isRTL ? 'לא הצלחנו לטעון' : "Couldn't load"}
+        </Text>
+        <TouchableOpacity onPress={load} style={{ marginTop: 12, backgroundColor: C.primary, paddingVertical: 10, paddingHorizontal: 20, borderRadius: 10 }}>
+          <Text style={{ color: '#fff', fontWeight: '600' }}>{isRTL ? 'נסה שוב' : 'Try again'}</Text>
+        </TouchableOpacity>
       </View>
     );
   }

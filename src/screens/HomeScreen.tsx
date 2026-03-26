@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, memo } from 'react';
+import React, { useState, useCallback, useMemo, memo, useRef } from 'react';
 import {
   View,
   Text,
@@ -271,6 +271,7 @@ const SectionRow = memo(({ id, title, sub, color, books, distances, isRTL, onSee
 export default function HomeScreen() {
   const navigation = useNavigation<HomeScreenNavigationProp>();
   const profile = useAuthStore(s => s.profile);
+  const user    = useAuthStore(s => s.user);
   const isRTL   = useLanguageStore(s => s.isRTL);
   const coords  = useLocationStore(s => s.coords);
 
@@ -280,29 +281,56 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState(false);
 
+  // Personalized scored books (from RPC) — separate from homeBooks
+  const [scoredBooks, setScoredBooks] = useState<Book[]>([]);
+  const jitterSeed = useRef(Math.random());
+
   const fetchBooks = useCallback(async () => {
     try {
-      // Fetch recent books + free books in parallel.
-      // Free books get their own query so they're never crowded out by the
-      // main date-sorted window (most books are 'sale', which dominates the top N).
+      // Fetch recent books + personalized scored books in parallel
       const sel = 'id,title,author,city,images,listing_type,price,condition,genres,created_at,user_id';
-      const [mainRes, freeRes] = await Promise.all([
+      const mainQuery = Promise.resolve(
         supabase.from('books').select(sel).eq('status', 'active')
-          .order('created_at', { ascending: false }).limit(300),
-        supabase.from('books').select(sel).eq('status', 'active')
-          .eq('listing_type', 'free').order('created_at', { ascending: false }).limit(50),
-      ]);
-      const main  = (mainRes.data  as Book[]) || [];
-      const free  = (freeRes.data  as Book[]) || [];
-      const seen  = new Set(main.map(b => b.id));
-      const merged = [...main, ...free.filter(b => !seen.has(b.id))];
+          .order('created_at', { ascending: false }).limit(300)
+      );
+
+      const promises: Promise<any>[] = [mainQuery];
+
+      // If logged in, also fetch personalized scored books via RPC
+      if (user) {
+        promises.push(
+          Promise.resolve(
+            supabase.rpc('get_personalized_catalog', {
+              p_limit: 200,
+              p_offset: 0,
+              p_blocked_ids: blockedIds.length > 0 ? blockedIds : [],
+              p_seed: jitterSeed.current,
+            })
+          )
+        );
+      }
+
+      const results = await Promise.all(promises);
+      const main = (results[0].data as Book[]) || [];
+
+      // Process scored books if available
+      if (user && results[1]?.data) {
+        const scored = (results[1].data as any[]).map((r: any) => ({
+          id: r.id, title: r.title, author: r.author, city: r.city,
+          images: r.images, listing_type: r.listing_type, price: r.price,
+          condition: r.condition, genres: r.genres, created_at: r.created_at,
+          user_id: r.user_id, score: r.score,
+        } as Book & { score?: number }));
+        setScoredBooks(scored);
+      }
+
       setFetchError(false);
-      setHomeBooks(merged);
+      setHomeBooks(main);
     } catch {
       setFetchError(true);
       setHomeBooks(useDataStore.getState().homeBooks);
     }
-  }, [setHomeBooks]);
+  }, [setHomeBooks, user, blockedIds]);
 
   // SWR: on focus show cached data immediately; background-fetch only if stale
   useFocusEffect(useCallback(() => {
@@ -314,6 +342,7 @@ export default function HomeScreen() {
   }, [fetchBooks]));
 
   const onRefresh = useCallback(async () => {
+    jitterSeed.current = Math.random();
     setRefreshing(true);
     await fetchBooks();
     setRefreshing(false);
@@ -325,6 +354,11 @@ export default function HomeScreen() {
       ? books.filter(b => !blockedIds.includes(b.user_id))
       : books;
     const take = (arr: Book[]) => arr.slice(0, 16);
+
+    // Use scored books (personalized) when available, otherwise fall back to date-sorted
+    const hasScored = scoredBooks.length > 0;
+    const scored = (filter: (b: Book) => boolean) =>
+      hasScored ? take(scoredBooks.filter(filter)) : take(visibleBooks.filter(filter));
 
     const distanceMap: Record<string, number> = {};
     if (coords) {
@@ -349,37 +383,37 @@ export default function HomeScreen() {
       nearbyBooks = take(visibleBooks.filter(b => b.city === profile.city));
     }
 
-    const result = [
+    const result: { id: string; titleHe: string; titleEn: string; subHe: string; subEn: string; color: string; books: Book[]; distances?: Record<string, string> }[] = [
       {
         id: 'recent',
         titleHe: 'חדש ב-BookLoop', titleEn: 'New on BookLoop',
         subHe: 'הספרים האחרונים שנוספו', subEn: 'Latest listings',
-        color: C.primary, books: take(visibleBooks), distances: undefined,
+        color: C.primary, books: take(visibleBooks),
       },
       {
         id: 'free',
         titleHe: 'ספרים חינם', titleEn: 'Free Books',
-        subHe: 'כי שיתוף זה כיף', subEn: 'Sharing is caring',
-        color: C.emerald, books: take(visibleBooks.filter(b => b.listing_type === 'free')), distances: undefined,
-      },
+        subHe: hasScored ? 'מותאם אישית' : 'כי שיתוף זה כיף',
+        subEn: hasScored ? 'Personalized for you' : 'Sharing is caring',
+        color: C.emerald, books: scored(b => b.listing_type === 'free'),      },
       {
         id: 'mint',
         titleHe: 'כמו חדשים', titleEn: 'Like New',
-        subHe: 'ספרים במצב מעולה', subEn: 'Excellent condition',
-        color: C.pink, books: take(visibleBooks.filter(b => b.condition === 'new' || b.condition === 'like_new')), distances: undefined,
-      },
+        subHe: hasScored ? 'מותאם אישית' : 'ספרים במצב מעולה',
+        subEn: hasScored ? 'Personalized for you' : 'Excellent condition',
+        color: C.pink, books: scored(b => b.condition === 'new' || b.condition === 'like_new'),      },
       {
         id: 'sale',
         titleHe: 'למכירה', titleEn: 'For Sale',
-        subHe: 'במחירים משתלמים', subEn: 'Great prices',
-        color: C.primary, books: take(visibleBooks.filter(b => b.listing_type === 'sale')), distances: undefined,
-      },
+        subHe: hasScored ? 'מותאם אישית' : 'במחירים משתלמים',
+        subEn: hasScored ? 'Personalized for you' : 'Great prices',
+        color: C.primary, books: scored(b => b.listing_type === 'sale'),      },
       {
         id: 'trade',
         titleHe: 'להחלפה', titleEn: 'For Trade',
-        subHe: 'ספר תמורת ספר', subEn: 'Book for a book',
-        color: C.amber, books: take(visibleBooks.filter(b => b.listing_type === 'trade')), distances: undefined,
-      },
+        subHe: hasScored ? 'מותאם אישית' : 'ספר תמורת ספר',
+        subEn: hasScored ? 'Personalized for you' : 'Book for a book',
+        color: C.amber, books: scored(b => b.listing_type === 'trade'),      },
     ];
 
     if (nearbyBooks.length > 0) {
@@ -395,7 +429,7 @@ export default function HomeScreen() {
     }
 
     return { sections: result };
-  }, [books, coords, profile?.city, blockedIds]);
+  }, [books, scoredBooks, coords, profile?.city, blockedIds, isRTL]);
 
   const goToCatalog       = useCallback(() => navigation.navigate('Catalog' as any), [navigation]);
   const goToCatalogWith   = useCallback((filter: string | null) => {

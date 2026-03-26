@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(where npx)",
+      "Bash(echo $PATH)",
+      "Bash(cmd.exe /c \"where npx\")",
+      "Bash(node -e \":*)",
+      "Bash(node -e \"const p = require\\(''./package.json''\\); const deps = {...p.dependencies, ...p.devDependencies}; Object.keys\\(deps\\).filter\\(k => k.includes\\(''gesture''\\) || k.includes\\(''manipulator''\\) || k.includes\\(''reanimated''\\) || k.includes\\(''image''\\)\\).forEach\\(k => console.log\\(k, deps[k]\\)\\)\")",
+      "Bash(node -e \"const p = require\\(''./package.json''\\); const deps = {...p.dependencies, ...p.devDependencies}; Object.keys\\(deps\\).filter\\(k => k.includes\\(''gesture''\\) || k.includes\\(''reanimated''\\) || k.includes\\(''pan''\\) || k.includes\\(''zoom''\\)\\).forEach\\(k => console.log\\(k, deps[k]\\)\\)\")",
+      "Bash(node -e \"const p = require\\(''./package.json''\\); const deps = {...p.dependencies, ...p.devDependencies}; Object.keys\\(deps\\).sort\\(\\).forEach\\(k => console.log\\(k, deps[k]\\)\\)\")",
+      "Bash(wsl.exe bash -c \"cat ~/build_bookloop.sh\")",
+      "Bash(wsl.exe bash -c \"ls ~/.eas/ 2>/dev/null || echo ''no .eas dir''; ls /mnt/c/Users/idanl/OneDrive/Desktop/bookloop_mobile/*.keystore 2>/dev/null || echo ''no keystore''; ls /mnt/c/Users/idanl/OneDrive/Desktop/bookloop_mobile/*.jks 2>/dev/null || echo ''no jks''\")",
+      "mcp__supabase__get_logs",
+      "mcp__supabase__execute_sql",
+      "mcp__supabase__search_docs",
+      "Bash(powershell.exe -Command \":*)",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\idanl\\\\OneDrive\\\\Desktop\\\\bookloop_mobile\\\\screenshots\\\\take_screenshot.ps1\")",
+      "Bash(powershell.exe -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\idanl\\\\OneDrive\\\\Desktop\\\\bookloop_mobile\\\\screenshots\\\\take_screenshot.ps1\" 1)",
+      "Bash(node -e \"require\\(''puppeteer''\\)\")",
+      "Bash(npx --yes puppeteer browsers install chrome)",
+      "Bash(powershell.exe -Command \"Get-NetTCPConnection -LocalPort 8081 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_-Force -ErrorAction SilentlyContinue }\")",
+      "Bash(powershell.exe -Command \"netstat -ano | findstr '':8081''\")",
+      "Bash(powershell.exe -Command \"Stop-Process -Id 41700 -Force\")"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "supabase"
+  ]
+}

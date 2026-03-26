@@ -164,8 +164,8 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
           <View style={s.handle} {...swipePan.panHandlers} />
 
           {/* Header */}
-          <View style={s.header}>
-            <View>
+          <View style={[s.header, isRTL && { flexDirection: 'row-reverse' }]}>
+            <View style={isRTL ? { alignItems: 'flex-end' } : undefined}>
               <Text style={s.headerTitle}>{isRTL ? 'סינון' : 'Filters'}</Text>
               {activeFiltersCount > 0 && (
                 <Text style={s.headerSub}>
@@ -222,7 +222,7 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
                     placeholder={isRTL ? "מינ׳" : 'Min'}
                     placeholderTextColor={C.muted}
                     value={minPrice}
-                    onChangeText={setMinPrice}
+                    onChangeText={t => setMinPrice(t.replace(/[^0-9]/g, ''))}
                     keyboardType="numeric"
                     textAlign="center"
                   />
@@ -234,7 +234,7 @@ export default function FiltersModal({ visible, onClose, onApply, currentFilters
                     placeholder={isRTL ? 'ללא הגבלה' : 'No limit'}
                     placeholderTextColor={C.muted}
                     value={maxPrice}
-                    onChangeText={setMaxPrice}
+                    onChangeText={t => setMaxPrice(t.replace(/[^0-9]/g, ''))}
                     keyboardType="numeric"
                     textAlign="center"
                   />

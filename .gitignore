@@ -50,3 +50,16 @@ credentials.json
 
 # EAS build config contains API keys — use eas.json.example for the repo
 eas.json
+
+# Local build artifacts
+build-*.aab
+build-*.apk
+
+# Screenshots (store listing assets)
+screenshots/
+screenshots_tablet_10/
+screenshots_tablet_7/
+screenshots_upscaled/
+
+# Misc
+nul

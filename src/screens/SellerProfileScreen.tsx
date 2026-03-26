@@ -16,6 +16,7 @@ import { Book, Profile } from '../types';
 import { useLanguageStore } from '../stores/languageStore';
 import { useAuthStore } from '../stores/authStore';
 import { SellerProfileSkeleton } from '../components/Skeleton';
+import { formatLastActive } from '../lib/formatLastActive';
 
 const C = {
   bg: '#fafaf9',
@@ -81,27 +82,32 @@ export default function SellerProfileScreen() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [books, setBooks]     = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
-    Promise.all([fetchProfile(), fetchBooks()]).finally(() => setLoading(false));
+    Promise.all([fetchProfile(), fetchBooks()])
+      .catch(() => setFetchError(true))
+      .finally(() => setLoading(false));
   }, [sellerId]);
 
   const fetchProfile = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', sellerId)
       .single();
+    if (error) throw error;
     if (data) setProfile(data);
   };
 
   const fetchBooks = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('books')
       .select('id,title,author,city,images,listing_type,price,condition,created_at')
       .eq('user_id', sellerId)
       .eq('status', 'active')
       .order('created_at', { ascending: false });
+    if (error) throw error;
     setBooks((data as Book[]) || []);
   };
 
@@ -123,6 +129,29 @@ export default function SellerProfileScreen() {
 
   if (loading) {
     return <SellerProfileSkeleton />;
+  }
+
+  if (fetchError && !profile) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg, padding: 32 }}>
+        <View style={{ width: 80, height: 80, borderRadius: 24, backgroundColor: '#fee2e2', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+          <Ionicons name="cloud-offline-outline" size={40} color="#ef4444" />
+        </View>
+        <Text style={{ fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 6 }}>
+          {isRTL ? 'לא הצלחנו לטעון' : "Couldn't load profile"}
+        </Text>
+        <Text style={{ fontSize: 14, color: C.muted, textAlign: 'center', marginBottom: 20 }}>
+          {isRTL ? 'בדוק את החיבור ונסה שוב' : 'Check your connection and try again'}
+        </Text>
+        <TouchableOpacity
+          style={{ backgroundColor: C.primary, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12 }}
+          onPress={() => { setLoading(true); setFetchError(false); Promise.all([fetchProfile(), fetchBooks()]).catch(() => setFetchError(true)).finally(() => setLoading(false)); }}
+          activeOpacity={0.8}
+        >
+          <Text style={{ color: '#fff', fontWeight: '600', fontSize: 15 }}>{isRTL ? 'נסה שוב' : 'Try again'}</Text>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   const displayName = profile?.name ?? sellerName ?? 'Seller';
@@ -162,6 +191,13 @@ export default function SellerProfileScreen() {
                 <View style={s.cityBadge}>
                   <Ionicons name="location-outline" size={13} color={C.muted} />
                   <Text style={s.cityTxt}>{profile.city}</Text>
+                </View>
+              )}
+
+              {profile?.last_active_at && formatLastActive(profile.last_active_at, isRTL) && (
+                <View style={[s.cityBadge, { marginTop: 4 }]}>
+                  <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: (Date.now() - new Date(profile.last_active_at).getTime()) < 3_600_000 ? '#059669' : C.muted }} />
+                  <Text style={s.cityTxt}>{formatLastActive(profile.last_active_at, isRTL)}</Text>
                 </View>
               )}
 

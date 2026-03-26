@@ -18,6 +18,7 @@ import { useLanguageStore } from '../stores/languageStore';
 import { WishlistSkeletons } from '../components/Skeleton';
 import { useDataStore } from '../stores/dataStore';
 import { useFavorite } from '../hooks/useFavorite';
+import { FetchErrorBanner } from '../components/Toast';
 
 const C = {
   bg:           '#fafaf9',
@@ -107,6 +108,7 @@ export default function WishlistScreen() {
     () => !!user && useDataStore.getState().wishlistFetchedAt === 0
   );
   const [refreshing, setRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   const fetchWishlist = useCallback(async () => {
     if (!user) return;
@@ -124,8 +126,10 @@ export default function WishlistScreen() {
         .filter(Boolean);
 
       setWishlistBooks(wishlist as Book[]);
+      setFetchError(false);
     } catch (e) {
       console.error('WishlistScreen fetchWishlist:', e);
+      setFetchError(true);
       // Stamp fetchedAt on failure to engage TTL backoff (prevents retry every focus)
       setWishlistBooks(useDataStore.getState().wishlistBooks);
     } finally {
@@ -239,6 +243,11 @@ export default function WishlistScreen() {
   // ── Grid ───────────────────────────────────────────────────────────────────
   return (
     <View style={s.container}>
+      {fetchError && (
+        <FetchErrorBanner
+          message={isRTL ? 'לא הצלחנו לרענן — משוך לרענון' : "Couldn't refresh — pull to retry"}
+        />
+      )}
       {/* Count header */}
       <View style={s.countBar}>
         <Ionicons name="heart" size={14} color={C.pink} />

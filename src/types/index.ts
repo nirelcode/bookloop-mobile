@@ -17,6 +17,7 @@ export interface Profile {
   total_sales?: number;
   created_at: string;
   favorite_genres?: string[];
+  last_active_at?: string;
 }
 
 export interface Book {
