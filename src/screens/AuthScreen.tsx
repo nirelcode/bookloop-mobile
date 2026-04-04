@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput, TouchableOpacity,
   Image, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform, Linking,
 } from 'react-native';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { signInWithGoogle } from '../lib/googleAuth';
+import { signInWithApple } from '../lib/appleAuth';
 import { useLanguageStore } from '../stores/languageStore';
 import { CityPickerModal } from '../components/CityPickerModal';
 
@@ -41,11 +43,11 @@ function InputRow({ icon, isRTL, children }: { icon: string; isRTL: boolean; chi
 }
 
 // ── Main screen ──────────────────────────────────────────────────────────────
-export default function AuthScreen() {
+export default function AuthScreen({ initialMode }: { initialMode?: 'signin' | 'signup' }) {
   const { isRTL } = useLanguageStore();
   const insets = useSafeAreaInsets();
 
-  const [mode, setMode]             = useState<Mode>('signin');
+  const [mode, setMode]             = useState<Mode>(initialMode ?? 'signin');
   const [email, setEmail]           = useState('');
   const [password, setPassword]     = useState('');
   const [name, setName]             = useState('');
@@ -56,14 +58,32 @@ export default function AuthScreen() {
   const [showCityPicker, setShowCityPicker] = useState(false);
   const [loading, setLoading]             = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleLoading, setAppleLoading]   = useState(false);
+  const [appleAvailable, setAppleAvailable] = useState(false);
   const [error, setError]                 = useState('');
   const [successEmail, setSuccessEmail]   = useState('');
   const [continueLoading, setContinueLoading] = useState(false);
   const [continueError, setContinueError]     = useState('');
 
+  useEffect(() => {
+    if (Platform.OS === 'ios') {
+      AppleAuthentication.isAvailableAsync().then(setAppleAvailable).catch(() => {});
+    }
+  }, []);
+
   const clearError = () => setError('');
 
   const switchMode = (m: Mode) => { setMode(m); clearError(); setAgreeTerms(false); };
+
+  const handleApple = async () => {
+    setAppleLoading(true);
+    clearError();
+    const result = await signInWithApple();
+    if (!result.success && result.error !== 'canceled') {
+      setError(result.error ?? 'Apple sign-in failed');
+    }
+    setAppleLoading(false);
+  };
 
   const handleGoogle = async () => {
     setGoogleLoading(true);
@@ -276,6 +296,27 @@ export default function AuthScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+
+          {/* Apple (iOS only) */}
+          {appleAvailable && (
+            <TouchableOpacity
+              style={s.appleBtn}
+              onPress={handleApple}
+              activeOpacity={0.85}
+              disabled={appleLoading}
+            >
+              {appleLoading ? (
+                <ActivityIndicator color={C.white} size="small" />
+              ) : (
+                <>
+                  <Ionicons name="logo-apple" size={20} color={C.white} />
+                  <Text style={s.appleTxt}>
+                    {isRTL ? 'המשך עם Apple' : 'Continue with Apple'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
 
           {/* Google */}
           <TouchableOpacity
@@ -537,6 +578,14 @@ const s = StyleSheet.create({
   },
   tabTxt:       { fontSize: 14, fontWeight: '600', color: C.muted },
   tabTxtActive: { color: C.text },
+
+  // Apple
+  appleBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    borderRadius: 12, paddingVertical: 13, marginBottom: 10,
+    backgroundColor: '#000000',
+  },
+  appleTxt: { fontSize: 15, fontWeight: '600', color: '#ffffff' },
 
   // Google
   googleBtn: {

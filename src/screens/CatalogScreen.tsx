@@ -256,10 +256,16 @@ export default function CatalogScreen() {
   useEffect(() => {
     AsyncStorage.getItem(SORT_KEY).then(val => {
       if (val && ['for_you', 'new', 'price_asc', 'price_desc'].includes(val)) {
+        // Don't restore for_you if user is not logged in
+        if (val === 'for_you' && !user) return;
         setSort(val as SortOption);
       }
     });
   }, []);
+  // If user logs out while on for_you, fall back to newest
+  useEffect(() => {
+    if (!user && sort === 'for_you') setSort('new');
+  }, [user]);
   const handleSetSort = useCallback((s: SortOption) => {
     setSort(s);
     AsyncStorage.setItem(SORT_KEY, s);
@@ -622,6 +628,7 @@ export default function CatalogScreen() {
         current={sort}
         onSelect={handleSetSort}
         isRTL={isRTL}
+        hasUser={!!user}
       />
 
       {/* ── Fetch error banner (shown when cached data visible but refresh failed) ── */}
@@ -863,13 +870,14 @@ const s = StyleSheet.create({
 // ── Sort Sheet ──────────────────────────────────────────────────────────────
 
 function SortSheet({
-  visible, onClose, current, onSelect, isRTL,
+  visible, onClose, current, onSelect, isRTL, hasUser,
 }: {
   visible: boolean;
   onClose: () => void;
   current: SortOption;
   onSelect: (s: SortOption) => void;
   isRTL: boolean;
+  hasUser: boolean;
 }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -880,7 +888,7 @@ function SortSheet({
           <Text style={[ss.title, isRTL && { textAlign: 'right' }]}>
             {isRTL ? 'מיון לפי' : 'Sort by'}
           </Text>
-          {SORT_OPTIONS.map((opt, i) => {
+          {SORT_OPTIONS.filter(o => o.value !== 'for_you' || hasUser).map((opt, i) => {
             const active = current === opt.value;
             return (
               <TouchableOpacity

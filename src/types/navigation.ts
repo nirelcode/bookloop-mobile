@@ -4,6 +4,7 @@ import type { CompositeNavigationProp } from '@react-navigation/native';
 
 export type RootStackParamList = {
   MainTabs: { screen?: keyof MainTabParamList } | undefined;
+  Auth: undefined;
   BookDetail: { bookId: string };
   SellerProfile: { sellerId: string; sellerName?: string };
   Settings: undefined;

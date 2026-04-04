@@ -184,7 +184,7 @@ export default function BookDetailScreen() {
   };
 
   const toggleWishlist = async () => {
-    if (!user) { supabase.auth.signOut(); return; }
+    if (!user) { navigation.navigate('Auth' as never); return; }
     setWishlistLoading(true);
     try {
       if (inWishlist) {
@@ -239,7 +239,7 @@ export default function BookDetailScreen() {
   };
 
   const handleContactSeller = () => {
-    if (!user) { supabase.auth.signOut(); return; }
+    if (!user) { navigation.navigate('Auth' as never); return; }
     if (book?.profiles) {
       const imgs = book.images?.length ? book.images : [`https://picsum.photos/seed/${book.id}/400/500`];
       navigation.navigate('Chat', {

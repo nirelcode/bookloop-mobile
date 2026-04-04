@@ -16,7 +16,8 @@
       "bundleIdentifier": "com.bookloop.mobile",
       "buildNumber": "1",
       "config": {
-        "usesNonExemptEncryption": false
+        "usesNonExemptEncryption": false,
+        "usesAppleSignIn": true
       },
       "infoPlist": {
         "NSCameraUsageDescription": "BookLoop needs camera access to scan books.",

@@ -43,6 +43,7 @@ import SellerProfileScreen from '../screens/SellerProfileScreen';
 import BlockedUsersScreen from '../screens/BlockedUsersScreen';
 import SplashOverlay from '../components/SplashOverlay';
 import OnboardingScreen, { SLIDES_SEEN_KEY } from '../screens/OnboardingScreen';
+import WelcomeScreen, { WELCOME_SEEN_KEY } from '../screens/WelcomeScreen';
 import AuthScreen         from '../screens/AuthScreen';
 import SetupScreen, { SETUP_DONE_KEY } from '../screens/SetupScreen';
 
@@ -182,6 +183,12 @@ function AppTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
       isPublish,
       options,
       onPress() {
+        // Guest users: redirect locked tabs to sign-in
+        const guestBlocked = !user && ['Publish', 'Messages', 'Profile'].includes(route.name);
+        if (guestBlocked) {
+          if (navigationRef.isReady()) navigationRef.navigate('Auth' as never);
+          return;
+        }
         const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
         if (!focused && !event.defaultPrevented) navigation.navigate(route.name as never);
       },
@@ -377,9 +384,10 @@ export function AppNavigator() {
   const { setCoords, setPermission } = useLocationStore();
   const { isRTL, language } = useLanguageStore();
 
-  const [slidesSeen, setSlidesSeen] = useState<boolean | null>(null);
-  const [setupDone,  setSetupDone]  = useState<boolean | null>(null);
-  const [splashDone, setSplashDone] = useState(false);
+  const [slidesSeen,   setSlidesSeen]   = useState<boolean | null>(null);
+  const [welcomeSeen,  setWelcomeSeen]  = useState<boolean | null>(null);
+  const [setupDone,    setSetupDone]    = useState<boolean | null>(null);
+  const [splashDone,   setSplashDone]   = useState(false);
 
   // Guarantee at least 1.4 s of splash so the animation is actually visible
   useEffect(() => {
@@ -389,6 +397,10 @@ export function AppNavigator() {
 
   useEffect(() => {
     AsyncStorage.getItem(SLIDES_SEEN_KEY).then(v => setSlidesSeen(v === 'true'));
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.getItem(WELCOME_SEEN_KEY).then(v => setWelcomeSeen(v === 'true'));
   }, []);
 
   useEffect(() => {
@@ -490,7 +502,7 @@ export function AppNavigator() {
     return () => { sub?.remove?.(); };
   }, []);
 
-  if (loading || slidesSeen === null || !splashDone) return <SplashOverlay />;
+  if (loading || slidesSeen === null || welcomeSeen === null || !splashDone) return <SplashOverlay />;
 
   // 1. Feature slides — once ever
   if (!slidesSeen) {
@@ -504,16 +516,53 @@ export function AppNavigator() {
     );
   }
 
-  // 2. Auth — mandatory
-  if (!user) return <AuthScreen />;
+  // 2. Welcome gate — shown once to unauthenticated users after onboarding
+  if (!welcomeSeen && !user) {
+    return (
+      <WelcomeScreen
+        onDone={async () => {
+          await AsyncStorage.setItem(WELCOME_SEEN_KEY, 'true');
+          setWelcomeSeen(true);
+        }}
+      />
+    );
+  }
 
-  // 3. Genre setup — once after first login
-  if (setupDone === null) return null;
+  // 3. Guest mode — browsing without an account
+  if (!user) {
+    return (
+      <NavigationContainer ref={navigationRef}>
+        <Stack.Navigator
+          key={language}
+          screenOptions={({ navigation: nav }) => ({
+            headerShown: false,
+            ...(isRTL ? {
+              headerLeft: () => null,
+              headerRight: () => (
+                <TouchableOpacity onPress={() => nav.goBack()} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+                  <Ionicons name="chevron-forward" size={26} color="#1c1917" />
+                </TouchableOpacity>
+              ),
+            } : {}),
+          })}
+        >
+          <Stack.Screen name="MainTabs"      component={MainTabs} />
+          <Stack.Screen name="Auth"          component={AuthScreen}          options={{ headerShown: true, title: '' }} />
+          <Stack.Screen name="BookDetail"    component={BookDetailScreen}    options={{ headerShown: true, title: '' }} />
+          <Stack.Screen name="SellerProfile" component={SellerProfileScreen} options={{ headerShown: true, title: '' }} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    );
+  }
+
+  // 4. Genre setup — once after first login
+  // Show splash instead of blank screen to avoid iPad freeze (issue 3)
+  if (setupDone === null) return <SplashOverlay />;
   if (!setupDone) {
     return <SetupScreen onDone={() => setSetupDone(true)} />;
   }
 
-  // 4. Main app
+  // 5. Main app
   return (
     <NavigationContainer
       ref={navigationRef}
