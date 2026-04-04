@@ -7,6 +7,12 @@
       "runtimeArgs": ["C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js", "expo", "start", "--web", "--port", "8083"],
       "port": 8083,
       "autoPort": true
+    },
+    {
+      "name": "Icon Preview",
+      "runtimeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+      "runtimeArgs": ["C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js", "serve", "temp_icons", "-p", "8099"],
+      "port": 8099
     }
   ]
 }

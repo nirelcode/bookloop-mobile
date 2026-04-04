@@ -1,0 +1,3 @@
+# EAS local build — override .gitignore rules
+# eas.json is gitignored (contains keys) but MUST be included in EAS archive
+!eas.json

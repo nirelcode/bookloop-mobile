@@ -1,0 +1,62 @@
+========== HEBREW ==========
+
+== PROMOTIONAL TEXT ==
+קנה, מכור והחלף ספרים עם אנשים בקרבתך
+
+
+== DESCRIPTION ==
+BookLoop (בוקלופ) היא האפליקציה לקנייה, מכירה והחלפת ספרים משומשים בישראל.
+
+פרסם ספרים תוך שניות, מצא ספרים ליד הבית, וצור קשר ישיר עם המוכר — בלי עמלות ובלי מתווכים.
+
+- פרסם ספר למכירה, מתנה או להחלפה
+- עיין באלפי ספרים מכל הז'אנרים
+- סנן לפי עיר, מחיר וז'אנר
+- שלח הודעות ישירות למוכרים
+- שמור ספרים לרשימת המשאלות
+- ממשק בעברית מלאה
+
+
+== KEYWORDS ==
+ספרים,ספרים משומשים,קניית ספרים,מכירת ספרים,החלפת ספרים,שוק ספרים,בוקלופ,bookloop
+
+
+== SUPPORT URL ==
+https://www.bookloop.co.il
+
+
+== COPYRIGHT ==
+2026 BookLoop
+
+
+========== ENGLISH ==========
+
+== PROMOTIONAL TEXT ==
+Buy, sell and trade books with people near you
+
+
+== DESCRIPTION ==
+BookLoop is the app for buying, selling, and trading used books in Israel.
+
+List books in seconds, find books near you, and message sellers directly — no fees, no middlemen.
+
+- List books for sale, for free, or for trade
+- Browse thousands of books across all genres
+- Filter by city, price, and genre
+- Message sellers directly in-app
+- Save books to your wishlist
+- Full Hebrew interface
+
+Also known as בוקלופ
+
+
+== KEYWORDS ==
+books,used books,buy books,sell books,book exchange,book market,bookloop,בוקלופ
+
+
+== SUPPORT URL ==
+https://www.bookloop.co.il
+
+
+== COPYRIGHT ==
+2026 BookLoop

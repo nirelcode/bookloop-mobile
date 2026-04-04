@@ -2,7 +2,7 @@
   "expo": {
     "name": "BookLoop",
     "slug": "bookloop-mobile",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -15,6 +15,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.bookloop.mobile",
       "buildNumber": "1",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
         "NSCameraUsageDescription": "BookLoop needs camera access to scan books.",
         "NSPhotoLibraryUsageDescription": "BookLoop needs photo library access to upload book images.",
@@ -25,10 +28,10 @@
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#3b82f6"
+        "backgroundColor": "#ffffff"
       },
       "package": "com.bookloop.mobile",
-      "versionCode": 5,
+      "versionCode": 9,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
@@ -73,6 +76,33 @@
         "expo-location",
         {
           "locationWhenInUsePermission": "BookLoop uses your location to show nearby books."
+        }
+      ],
+      [
+        "react-native-android-widget",
+        {
+          "widgets": [
+            {
+              "name": "BookLoop",
+              "label": "BookLoop",
+              "description": "Browse latest books with details",
+              "minWidth": "200dp",
+              "minHeight": "150dp",
+              "previewImage": "./assets/widget_preview_full.png",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 43200000
+            },
+            {
+              "name": "BookLoopGrid",
+              "label": "BookLoop Gallery",
+              "description": "Book covers with prices",
+              "minWidth": "200dp",
+              "minHeight": "150dp",
+              "previewImage": "./assets/widget_preview_grid.png",
+              "resizeMode": "horizontal|vertical",
+              "updatePeriodMillis": 43200000
+            }
+          ]
         }
       ]
     ],

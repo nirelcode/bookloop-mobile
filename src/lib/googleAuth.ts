@@ -47,6 +47,7 @@ export async function signInWithGoogle() {
               id:   sessionData.user.id,
               name: sessionData.user.user_metadata?.full_name || sessionData.user.email?.split('@')[0] || 'User',
               city: 'תל אביב',
+              signup_platform: Platform.OS,
             });
           }
         }

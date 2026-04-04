@@ -26,6 +26,39 @@
 
 <!-- Add new entries at the TOP, below this line -->
 
+## [PENDING] 2026-03-31 — Add signup_platform to profiles + impression tracking
+**Origin**: bookloop_mobile
+**Type**: Database Migration + RPC Function + Auth
+
+### What was done in the origin project:
+- Added `signup_platform text` column to `profiles` table (values: 'android', 'ios', 'web', null for existing users)
+- Updated `handle_new_user` trigger to read `signup_platform` from `raw_user_meta_data`
+- Mobile app passes `signup_platform: Platform.OS` in both email signup (AuthScreen) and Google OAuth (googleAuth.ts)
+- Created `book_impressions` table for feed impression tracking
+- Updated `get_personalized_catalog` RPC: now tracks impressions server-side and penalizes books shown but not clicked (-3 per impression, capped at -15)
+
+### What the other project needs to do:
+- [ ] Update `src/lib/database.types.ts` — add `signup_platform: string | null` to profiles `Row`, `Insert`, `Update` types
+- [ ] Pass `signup_platform: 'web'` in auth metadata on signup: `options: { data: { ..., signup_platform: 'web' } }`
+- [ ] Update `get_personalized_catalog` in database.types.ts if using the RPC (return type unchanged, no new params)
+
+### Migration SQL (already applied to Supabase):
+```sql
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS signup_platform text DEFAULT NULL;
+
+CREATE TABLE public.book_impressions (
+  user_id uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  book_id uuid NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  seen_count int NOT NULL DEFAULT 1,
+  last_seen_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, book_id)
+);
+CREATE INDEX idx_book_impressions_user ON book_impressions(user_id);
+ALTER TABLE book_impressions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users manage own impressions" ON book_impressions FOR ALL
+  USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+```
+
 ## [PENDING] 2026-03-20 — Add last_active_at to profiles table
 **Origin**: bookloop_mobile
 **Type**: Database Migration + Types Update

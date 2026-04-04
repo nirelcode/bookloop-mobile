@@ -108,6 +108,7 @@ export default function AuthScreen() {
             data: {
               name: name.trim(),
               city: city || 'תל אביב',
+              signup_platform: Platform.OS,
             },
           },
         });

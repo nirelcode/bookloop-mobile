@@ -5,7 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   FlatList,
-  Dimensions,
+  useWindowDimensions,
   NativeSyntheticEvent,
   NativeScrollEvent,
   Image,
@@ -13,8 +13,6 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLanguageStore } from '../stores/languageStore';
-
-const { width: W, height: H } = Dimensions.get('window');
 
 const C = {
   bg:           '#fafaf9',
@@ -80,13 +78,14 @@ interface Props { onDone: () => void; }
 export default function OnboardingScreen({ onDone }: Props) {
   const { isRTL } = useLanguageStore();
   const insets    = useSafeAreaInsets();
+  const { width: W, height: H } = useWindowDimensions();
 
   const slides     = isRTL ? [...SLIDES].reverse() : SLIDES;
   const startIndex = isRTL ? slides.length - 1 : 0;
 
   const [page,   setPage]   = useState(startIndex);
   // Start with an estimate; onLayout corrects it after first render
-  const [listH,  setListH]  = useState(H * 0.65);
+  const [listH,  setListH]  = useState(() => H * 0.65);
   const listRef = useRef<FlatList>(null);
 
   const isLast = isRTL ? page === 0 : page === slides.length - 1;

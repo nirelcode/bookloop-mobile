@@ -515,7 +515,22 @@ export function AppNavigator() {
 
   // 4. Main app
   return (
-    <NavigationContainer ref={navigationRef}>
+    <NavigationContainer
+      ref={navigationRef}
+      linking={{
+        prefixes: ['bookloop://'],
+        config: {
+          screens: {
+            BookDetail: 'book/:bookId',
+            MainTabs: {
+              screens: {
+                Catalog: 'catalog',
+              },
+            },
+          },
+        },
+      }}
+    >
       <Stack.Navigator
         key={language}
         screenOptions={({ navigation: nav }) => ({

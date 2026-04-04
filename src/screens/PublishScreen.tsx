@@ -34,6 +34,8 @@ import { compressImage, cropBookFromBBox, getImageDimensions, cropImage, rotateI
 import { BOOK_CONDITIONS, LISTING_TYPES, BOOK_GENRES, CITIES } from '../constants/books';
 import { CITY_COORDS } from '../constants/categoryGenreMap';
 import { GenrePickerModal } from '../components/GenrePickerModal';
+import { useReviewPrompt } from '../hooks/useReviewPrompt';
+import { ReviewPromptModal } from '../components/ReviewPromptModal';
 
 // Enable LayoutAnimation on Android
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -959,6 +961,7 @@ export default function PublishScreen() {
   const { isRTL }         = useLanguageStore();
   const navigation        = useNavigation<any>();
   const insets             = useSafeAreaInsets();
+  const review             = useReviewPrompt();
 
   const [phase,       setPhase]       = useState<Phase>('idle');
   const [sourceUri,   setSourceUri]   = useState<string | null>(null);
@@ -1325,6 +1328,7 @@ export default function PublishScreen() {
   // ── Publish ────────────────────────────────────────────────────────────────
 
   const handlePublishAll = async () => {
+    console.log('[Publish] START', { city, listingType, booksLen: books.length, price, lookingFor });
     if (!city.trim()) {
       Alert.alert(isRTL ? 'שגיאה' : 'Error', isRTL ? 'יש לבחור עיר' : 'City is required');
       return;
@@ -1344,10 +1348,11 @@ export default function PublishScreen() {
       return;
     }
 
+    console.log('[Publish] Validation passed');
     setPublishing(true);
     try {
-      console.log('[Publish] Starting, books:', books.length, 'city:', city, 'listingType:', listingType);
       const coords = CITY_COORDS[city];
+      console.log('[Publish] coords:', coords);
 
       const categoryFromGenre = (genres: string[]) => {
         if (genres.includes('children'))  return 'children';
@@ -1360,7 +1365,7 @@ export default function PublishScreen() {
       };
 
       for (const book of books) {
-        console.log('[Publish] Processing book:', book.title, 'croppedUri:', !!book.croppedUri);
+        console.log('[Publish] Processing book:', book.title, 'hasImage:', !!book.croppedUri);
         let imageUrls: string[] = [];
         if (book.croppedUri) {
           try {
@@ -1368,7 +1373,7 @@ export default function PublishScreen() {
             imageUrls = [await uploadImageToStorage(book.croppedUri, user!.id)];
             console.log('[Publish] Image uploaded OK');
           } catch (uploadErr: any) {
-            console.warn('[Publish] Image upload failed:', uploadErr.message);
+            console.warn('[Publish] Image upload failed:', uploadErr?.message);
           }
         }
 
@@ -1391,35 +1396,37 @@ export default function PublishScreen() {
           shipping_type:   shippingType,
           shipping_details: shippingType === 'shipping' ? shippingDetails.trim() || null : null,
         };
-        console.log('[Publish] Inserting:', JSON.stringify(payload));
-
+        console.log('[Publish] Inserting book...');
         const { error: insertError } = await supabase.from('books').insert(payload);
         if (insertError) {
-          console.error('[Publish] INSERT ERROR:', JSON.stringify(insertError, null, 2));
+          console.error('[Publish] INSERT ERROR:', JSON.stringify(insertError));
           throw new Error(insertError.message);
         }
         console.log('[Publish] Insert OK');
       }
 
-      console.log('[Publish] All done, clearing...');
+      console.log('[Publish] All books inserted, post-processing...');
       const count = books.length;
       // Bust caches so new listings appear immediately on Home + MyBooks
       useDataStore.getState().invalidateHome();
       useDataStore.getState().invalidateMyBooks();
+      console.log('[Publish] Calling Haptics...');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      console.log('[Publish] Calling clearAll...');
       await clearAll();
+      console.log('[Publish] Navigating to MyBooks...');
       navigation.navigate('MyBooks');
       setTimeout(() => {
         Alert.alert(
           isRTL ? '🎉 פורסם בהצלחה!' : '🎉 Published!',
           isRTL ? `${count} ספרים פורסמו בהצלחה` : `${count} book${count !== 1 ? 's' : ''} published successfully`,
         );
+        // Show review prompt after successful publish (delayed so alert clears first)
+        setTimeout(() => review.maybeShowDirect(), 500);
       }, 300);
     } catch (e: any) {
-      console.error('[Publish] CAUGHT ERROR:', e.message);
       Alert.alert(isRTL ? 'שגיאה' : 'Error', e.message || 'Unknown error');
     } finally {
-      console.log('[Publish] Finally: setPublishing(false)');
       setPublishing(false);
     }
   };
@@ -1745,6 +1752,13 @@ export default function PublishScreen() {
           </Pressable>
         </Pressable>
       )}
+
+      <ReviewPromptModal
+        visible={review.visible}
+        onYes={review.handleYes}
+        onNotNow={review.handleNotNow}
+        onDismiss={review.handleDismiss}
+      />
 
     </View>
   );

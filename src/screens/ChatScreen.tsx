@@ -16,7 +16,6 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
-import * as StoreReview from 'expo-store-review';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -32,6 +31,8 @@ import { useToast, Toast } from '../components/Toast';
 import { ReportModal } from '../components/ReportModal';
 import SellerBooksPickerModal, { PickerBook } from '../components/SellerBooksPickerModal';
 import i18n from '../lib/i18n';
+import { useReviewPrompt } from '../hooks/useReviewPrompt';
+import { ReviewPromptModal } from '../components/ReviewPromptModal';
 
 interface Message {
   id: string;
@@ -133,7 +134,7 @@ export default function ChatScreen() {
   });
 
   const { showToast, toast } = useToast();
-  const [reviewPromptVisible, setReviewPromptVisible] = useState(false);
+  const review = useReviewPrompt();
 
   const flatListRef    = useRef<FlatList>(null);
   const channelRef     = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -428,63 +429,6 @@ export default function ChatScreen() {
 
   // ── Realtime ──────────────────────────────────────────────────────────────
 
-  // ── Review pre-prompt ──────────────────────────────────────────────────────
-  const REVIEW_KEY = 'bookloop_review_v2';
-  const MAX_ASKS   = 3;
-  const COOLDOWN   = 45 * 24 * 60 * 60 * 1000; // 45 days
-  const MIN_AGE    = 7  * 24 * 60 * 60 * 1000; // account must be ≥ 7 days old
-
-  const maybeShowReviewPrompt = async () => {
-    try {
-      // Guard: account age
-      const createdAt = profile?.created_at ? new Date(profile.created_at).getTime() : Date.now();
-      if (Date.now() - createdAt < MIN_AGE) return;
-
-      const raw = await AsyncStorage.getItem(REVIEW_KEY);
-      const data = raw ? JSON.parse(raw) : { status: null, askCount: 0, askedAt: 0 };
-
-      // Permanent dismiss
-      if (data.status === 'dismissed') return;
-      // Max asks reached
-      if (data.askCount >= MAX_ASKS) return;
-      // Cooldown between asks
-      if (data.askedAt && Date.now() - data.askedAt < COOLDOWN) return;
-
-      setReviewPromptVisible(true);
-    } catch {}
-  };
-
-  const handleReviewYes = async () => {
-    setReviewPromptVisible(false);
-    try {
-      const raw = await AsyncStorage.getItem(REVIEW_KEY);
-      const data = raw ? JSON.parse(raw) : { askCount: 0 };
-      await AsyncStorage.setItem(REVIEW_KEY, JSON.stringify({
-        ...data, status: 'asked', askedAt: Date.now(), askCount: (data.askCount || 0) + 1,
-      }));
-      const ok = await StoreReview.isAvailableAsync();
-      if (ok) StoreReview.requestReview();
-    } catch {}
-  };
-
-  const handleReviewNotNow = async () => {
-    setReviewPromptVisible(false);
-    try {
-      const raw = await AsyncStorage.getItem(REVIEW_KEY);
-      const data = raw ? JSON.parse(raw) : { askCount: 0 };
-      await AsyncStorage.setItem(REVIEW_KEY, JSON.stringify({
-        ...data, askedAt: Date.now(), askCount: (data.askCount || 0) + 1,
-      }));
-    } catch {}
-  };
-
-  const handleReviewDismiss = async () => {
-    setReviewPromptVisible(false);
-    try {
-      await AsyncStorage.setItem(REVIEW_KEY, JSON.stringify({ status: 'dismissed' }));
-    } catch {}
-  };
-
   const subscribeToMessages = (chatId: string) => {
     if (channelRef.current) supabase.removeChannel(channelRef.current);
     const channel = supabase.channel(`messages:${chatId}`)
@@ -547,7 +491,7 @@ export default function ChatScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       markChatRead(conversationId).then(triggerUnreadRefresh);
       // Smart review pre-prompt
-      maybeShowReviewPrompt();
+      review.maybeShow();
       sendPushNotification(recipientId, text || (isRTL ? 'שיתף ספר' : 'Shared a book')).catch(() => {});
     } catch (error) {
       console.error('Error sending message:', error);
@@ -907,29 +851,12 @@ export default function ChatScreen() {
 
       <Toast {...toast} />
 
-      {/* ── Review pre-prompt ── */}
-      <Modal visible={reviewPromptVisible} transparent animationType="fade" onRequestClose={handleReviewNotNow}>
-        <Pressable style={s.reviewOverlay} onPress={handleReviewNotNow}>
-          <Pressable style={s.reviewSheet} onPress={() => {}}>
-            <Text style={s.reviewEmoji}>⭐</Text>
-            <Text style={s.reviewTitle}>{isRTL ? 'נהנה מ-BookLoop?' : 'Enjoying BookLoop?'}</Text>
-            <Text style={s.reviewSub}>
-              {isRTL
-                ? 'דירוג קצר עוזר לנו לגדול ולהביא עוד ספרים לקהילה'
-                : 'A quick rating helps us grow and bring more books to the community'}
-            </Text>
-            <TouchableOpacity style={s.reviewYesBtn} onPress={handleReviewYes} activeOpacity={0.85}>
-              <Text style={s.reviewYesTxt}>{isRTL ? 'כן, אוהב את האפליקציה! ⭐' : 'Yes, I love it! ⭐'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={s.reviewNoBtn} onPress={handleReviewNotNow} activeOpacity={0.8}>
-              <Text style={s.reviewNoTxt}>{isRTL ? 'לא עכשיו' : 'Not right now'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={handleReviewDismiss} activeOpacity={0.7}>
-              <Text style={s.reviewDismissTxt}>{isRTL ? 'אל תשאל שוב' : "Don't ask again"}</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <ReviewPromptModal
+        visible={review.visible}
+        onYes={review.handleYes}
+        onNotNow={review.handleNotNow}
+        onDismiss={review.handleDismiss}
+      />
     </View>
   );
 }
@@ -939,17 +866,6 @@ export default function ChatScreen() {
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fafaf9' },
 
-  // Review prompt
-  reviewOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 32 },
-  reviewSheet:   { backgroundColor: '#fff', borderRadius: 20, padding: 28, width: '100%', alignItems: 'center', gap: 8 },
-  reviewEmoji:   { fontSize: 40, marginBottom: 4 },
-  reviewTitle:   { fontSize: 20, fontWeight: '700', color: '#1c1917', textAlign: 'center' },
-  reviewSub:     { fontSize: 14, color: '#78716c', textAlign: 'center', lineHeight: 20, marginBottom: 8 },
-  reviewYesBtn:  { backgroundColor: '#2563eb', borderRadius: 12, paddingVertical: 13, paddingHorizontal: 24, width: '100%', alignItems: 'center' },
-  reviewYesTxt:  { color: '#fff', fontSize: 15, fontWeight: '600' },
-  reviewNoBtn:   { borderWidth: 1, borderColor: '#e7e5e4', borderRadius: 12, paddingVertical: 11, paddingHorizontal: 24, width: '100%', alignItems: 'center' },
-  reviewNoTxt:   { color: '#78716c', fontSize: 15, fontWeight: '500' },
-  reviewDismissTxt: { fontSize: 13, color: '#a8a29e', marginTop: 4, textDecorationLine: 'underline' },
   list:      { padding: 16, paddingBottom: 8 },
 
   bubble: {

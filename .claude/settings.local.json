@@ -21,7 +21,16 @@
       "Bash(npx --yes puppeteer browsers install chrome)",
       "Bash(powershell.exe -Command \"Get-NetTCPConnection -LocalPort 8081 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_-Force -ErrorAction SilentlyContinue }\")",
       "Bash(powershell.exe -Command \"netstat -ano | findstr '':8081''\")",
-      "Bash(powershell.exe -Command \"Stop-Process -Id 41700 -Force\")"
+      "Bash(powershell.exe -Command \"Stop-Process -Id 41700 -Force\")",
+      "Bash(ls C:/Users/idanl/OneDrive/Desktop/bookloop_mobile/assets/widget_preview*.png)",
+      "Bash(base64 -w0 C:/Users/idanl/OneDrive/Desktop/bookloop_mobile/assets/logo.png)",
+      "Bash(npx puppeteer:*)",
+      "Bash(npm root:*)",
+      "Bash(npm list:*)",
+      "Bash(npx puppeteer@latest --eval \"console.log\\(''''test''''\\)\")",
+      "Bash(npm install:*)",
+      "Bash(node _mockup/capture.js)",
+      "Bash(npm uninstall:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

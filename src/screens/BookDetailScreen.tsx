@@ -28,6 +28,8 @@ import i18n from '../lib/i18n';
 import { BookDetailSkeleton } from '../components/Skeleton';
 import { useToast, Toast } from '../components/Toast';
 import { ReportModal } from '../components/ReportModal';
+import { useReviewPrompt } from '../hooks/useReviewPrompt';
+import { ReviewPromptModal } from '../components/ReviewPromptModal';
 import { GENRE_LABEL_MAP, DB_VALUE_TO_LABEL } from '../constants/books';
 import { formatLastActive } from '../lib/formatLastActive';
 
@@ -62,6 +64,7 @@ export default function BookDetailScreen() {
   const route      = useRoute();
   const navigation = useNavigation<any>();
   const insets     = useSafeAreaInsets();
+  const review     = useReviewPrompt();
   const { bookId } = route.params as { bookId: string };
 
   // Seed instantly from home cache — skeleton only shows on cold load
@@ -146,7 +149,7 @@ export default function BookDetailScreen() {
     try {
       const { data, error } = await supabase
         .from('books')
-        .select('*, profiles(*)')
+        .select('*, profiles!books_user_id_fkey(*)')
         .eq('id', bookId)
         .single();
       if (error) throw error;
@@ -193,6 +196,7 @@ export default function BookDetailScreen() {
         setInWishlist(true);
         addFavoriteId(bookId);
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        review.maybeShowAfterWishlist();
       }
       invalidateWishlist();
     } catch (error: any) {
@@ -583,6 +587,13 @@ export default function BookDetailScreen() {
       />
 
       <Toast {...toast} />
+
+      <ReviewPromptModal
+        visible={review.visible}
+        onYes={review.handleYes}
+        onNotNow={review.handleNotNow}
+        onDismiss={review.handleDismiss}
+      />
     </View>
   );
 }

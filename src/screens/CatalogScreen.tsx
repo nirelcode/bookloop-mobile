@@ -31,6 +31,7 @@ import { CatalogSkeletons } from '../components/Skeleton';
 import { useFavorite } from '../hooks/useFavorite';
 import { FetchErrorBanner } from '../components/Toast';
 import { useDataStore } from '../stores/dataStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const H_PAD = 16;
 const COL_GAP = 10;
@@ -247,8 +248,22 @@ export default function CatalogScreen() {
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [filters, setFilters]     = useState<any>({});
   const [showFilters, setShowFilters] = useState(false);
-  const [sort, setSort]           = useState<SortOption>('for_you');
+  const [sort, setSort]           = useState<SortOption>('new');
   const [showSort, setShowSort]   = useState(false);
+
+  // ── Persist sort preference ───────────────────────────────────────────────
+  const SORT_KEY = 'bookloop_catalog_sort';
+  useEffect(() => {
+    AsyncStorage.getItem(SORT_KEY).then(val => {
+      if (val && ['for_you', 'new', 'price_asc', 'price_desc'].includes(val)) {
+        setSort(val as SortOption);
+      }
+    });
+  }, []);
+  const handleSetSort = useCallback((s: SortOption) => {
+    setSort(s);
+    AsyncStorage.setItem(SORT_KEY, s);
+  }, []);
 
   // ── Stable jitter seed for personalized feed (regenerated on pull-to-refresh) ──
   const jitterSeed = useRef(Math.random());
@@ -605,7 +620,7 @@ export default function CatalogScreen() {
         visible={showSort}
         onClose={() => setShowSort(false)}
         current={sort}
-        onSelect={setSort}
+        onSelect={handleSetSort}
         isRTL={isRTL}
       />
 
